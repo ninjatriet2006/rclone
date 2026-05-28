@@ -158,7 +158,7 @@ jobs:
           # Build AppImage (only for x86_64 to ensure tool compatibility)
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
             # Download appimagetool
-            wget -q https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage
+            wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
             chmod +x appimagetool-x86_64.AppImage
             
             mkdir -p AppDir/usr/bin
@@ -182,7 +182,13 @@ jobs:
             Categories=Utility;
             EOF
             
-            touch AppDir/rclone-tui.png
+            # Create a simple valid SVG icon for the AppImage
+            cat <<EOF | sed 's/^ *//' > AppDir/rclone-tui.svg
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <rect width="100" height="100" fill="#2d3748" rx="20"/>
+              <text x="50" y="65" font-family="monospace" font-weight="bold" font-size="50" fill="#f7fafc" text-anchor="middle">R</text>
+            </svg>
+            EOF
             
             ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir rclone-tui-linux-x86_64.AppImage
           fi
