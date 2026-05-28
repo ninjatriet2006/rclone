@@ -134,23 +134,13 @@ jobs:
           mkdir -p pkg_build/usr/bin
           cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui pkg_build/usr/bin/
           
-          # Create desktop application launcher inside the package
-          mkdir -p pkg_build/usr/share/applications
-          cat <<EOF > pkg_build/usr/share/applications/rclone-tui.desktop
-          [Desktop Entry]
-          Type=Application
-          Name=Rclone TUI
-          Comment=Rclone Terminal User Interface Dashboard
-          Exec=rclone-tui
-          Icon=utilities-terminal
-          Terminal=true
-          Categories=Utility;
-          EOF
+          # Extract version from tag name (e.g. tui-v1.75.0.0.1 -> 1.75.0.0.1)
+          PKG_VERSION=$(echo "${{ github.ref_name }}" | sed 's/tui-v//')
           
           # Write control file
           cat <<EOF > pkg_build/DEBIAN/control
           Package: rclone-tui
-          Version: 1.0.0
+          Version: $PKG_VERSION
           Section: utils
           Priority: optional
           Architecture: $DEB_ARCH
