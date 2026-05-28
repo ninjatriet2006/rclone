@@ -153,7 +153,7 @@ jobs:
           dpkg-deb --build pkg_build rclone-tui-linux-$DEB_ARCH.deb
           
           # Convert .deb to .rpm
-          sudo alien --to-rpm --nodeps rclone-tui-linux-$DEB_ARCH.deb
+          sudo alien --to-rpm rclone-tui-linux-$DEB_ARCH.deb
           sudo mv rclone-tui-*.rpm rclone-tui-linux-$RPM_ARCH.rpm
           
           # Build AppImage (only for x86_64 to ensure tool compatibility)
