@@ -16,19 +16,24 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: rclone-tui-linux-amd64.tar.gz
+            artifact_name: rclone-tui-linux-amd64
             binary_name: rclone-tui
             command_archive: tar -czf ../rclone-tui-linux-amd64.tar.gz rclone-tui
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: rclone-tui-linux-arm64.tar.gz
+            artifact_name: rclone-tui-linux-arm64
             binary_name: rclone-tui
             command_archive: tar -czf ../rclone-tui-linux-arm64.tar.gz rclone-tui
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: rclone-tui-windows-amd64.zip
+            artifact_name: rclone-tui-windows-amd64
             binary_name: rclone-tui.exe
             command_archive: tar -a -c -f ..\rclone-tui-windows-amd64.zip rclone-tui.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: rclone-tui-windows-arm64
+            binary_name: rclone-tui.exe
+            command_archive: tar -a -c -f ..\rclone-tui-windows-arm64.zip rclone-tui.exe
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -53,16 +58,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      # CGO on Windows requires gcc. We setup MSYS2 / MinGW to get it.
+      # CGO on Windows requires gcc/clang. We setup MSYS2 / MinGW to get it for Windows x64.
       - name: Set up MinGW (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: msys2/setup-msys2@v2
         with:
           update: true
           install: mingw-w64-x86_64-toolchain
 
       - name: Add GCC to PATH (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
           echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
 
@@ -78,9 +83,18 @@ jobs:
         run: |
           CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
-      - name: Compile Go librclone (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Compile Go librclone (Windows x64)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
+          go build -buildmode=c-archive -o rclone.lib github.com/rclone/rclone/librclone
+
+      - name: Compile Go librclone (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          $env:CGO_ENABLED="1"
+          $env:CC="clang"
+          $env:GOOS="windows"
+          $env:GOARCH="arm64"
           go build -buildmode=c-archive -o rclone.lib github.com/rclone/rclone/librclone
 
       # Compile the Rust TUI in release mode
@@ -91,7 +105,7 @@ jobs:
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
 
-      # Package the binary
+      # Package the binary into .tar.gz or .zip
       - name: Archive Binary
         shell: bash
         run: |
@@ -100,12 +114,87 @@ jobs:
           cd build_out
           ${{ matrix.command_archive }}
 
-      # Upload Artifact to Action Run
+      # Build .deb, .rpm, .AppImage (Linux only)
+      - name: Build Linux Packages (.deb, .rpm, .AppImage)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update && sudo apt-get install -y alien rpm
+          
+          # Detect architecture for package naming
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            DEB_ARCH="arm64"
+            RPM_ARCH="aarch64"
+          else
+            DEB_ARCH="amd64"
+            RPM_ARCH="x86_64"
+          fi
+          
+          # Create temporary folder
+          mkdir -p pkg_build/DEBIAN
+          mkdir -p pkg_build/usr/bin
+          cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui pkg_build/usr/bin/
+          
+          # Write control file
+          cat <<EOF > pkg_build/DEBIAN/control
+          Package: rclone-tui
+          Version: 1.0.0
+          Section: utils
+          Priority: optional
+          Architecture: $DEB_ARCH
+          Maintainer: ninjatriet2006
+          Description: Rclone Terminal User Interface (TUI) Dashboard
+          EOF
+          
+          # Build .deb
+          dpkg-deb --build pkg_build rclone-tui-linux-$DEB_ARCH.deb
+          
+          # Convert .deb to .rpm
+          sudo alien --to-rpm --nodeps rclone-tui-linux-$DEB_ARCH.deb
+          mv rclone-tui-*.rpm rclone-tui-linux-$RPM_ARCH.rpm
+          
+          # Build AppImage (only for x86_64 to ensure tool compatibility)
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            # Download appimagetool
+            wget -q https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage
+            chmod +x appimagetool-x86_64.AppImage
+            
+            mkdir -p AppDir/usr/bin
+            cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui AppDir/usr/bin/
+            
+            cat <<'EOF' > AppDir/AppRun
+          #!/bin/sh
+          SELF=$(readlink -f "$0")
+          HERE=$(dirname "$SELF")
+          exec "$HERE/usr/bin/rclone-tui" "$@"
+          EOF
+            chmod +x AppDir/AppRun
+            
+            cat <<EOF > AppDir/rclone-tui.desktop
+          [Desktop Entry]
+          Type=Application
+          Name=Rclone TUI
+          Comment=Rclone Terminal User Interface Dashboard
+          Exec=rclone-tui
+          Icon=rclone-tui
+          Categories=Utility;
+          EOF
+            
+            touch AppDir/rclone-tui.png
+            
+            ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir rclone-tui-linux-x86_64.AppImage
+          fi
+
+      # Upload Artifacts to Action Run
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          path: |
+            *.tar.gz
+            *.zip
+            *.deb
+            *.rpm
+            *.AppImage
 
   release:
     name: Create GitHub Release
@@ -125,9 +214,11 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            release_artifacts/rclone-tui-linux-amd64.tar.gz
-            release_artifacts/rclone-tui-linux-arm64.tar.gz
-            release_artifacts/rclone-tui-windows-amd64.zip
+            release_artifacts/*.tar.gz
+            release_artifacts/*.zip
+            release_artifacts/*.deb
+            release_artifacts/*.rpm
+            release_artifacts/*.AppImage
           draft: false
           prerelease: false
           generate_release_notes: true
