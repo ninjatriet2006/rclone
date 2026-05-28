@@ -12,8 +12,8 @@ fn main() {
     // Yêu cầu liên kết tĩnh với rclone (tìm file librclone.a hoặc rclone.lib)
     println!("cargo:rustc-link-lib=static=rclone");
 
-    // Liên kết các thư viện hệ thống bắt buộc đối với Go runtime tùy theo hệ điều hành
     let target = std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target == "windows" {
         println!("cargo:rustc-link-lib=dylib=ws2_32");
         println!("cargo:rustc-link-lib=dylib=userenv");
@@ -21,6 +21,9 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=iphlpapi");
         println!("cargo:rustc-link-lib=dylib=winmm");
         println!("cargo:rustc-link-lib=dylib=shell32");
+        if target_env == "msvc" {
+            println!("cargo:rustc-link-lib=legacy_stdio_definitions");
+        }
     } else {
         println!("cargo:rustc-link-lib=dylib=pthread");
         println!("cargo:rustc-link-lib=dylib=dl");
