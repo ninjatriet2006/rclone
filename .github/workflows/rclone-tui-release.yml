@@ -138,7 +138,7 @@ jobs:
           PKG_VERSION=$(echo "${{ github.ref_name }}" | sed 's/tui-v//')
           
           # Write control file
-          cat <<EOF > pkg_build/DEBIAN/control
+          cat <<EOF | sed 's/^ *//' > pkg_build/DEBIAN/control
           Package: rclone-tui
           Version: $PKG_VERSION
           Section: utils
@@ -164,23 +164,23 @@ jobs:
             mkdir -p AppDir/usr/bin
             cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui AppDir/usr/bin/
             
-            cat <<'EOF' > AppDir/AppRun
-          #!/bin/sh
-          SELF=$(readlink -f "$0")
-          HERE=$(dirname "$SELF")
-          exec "$HERE/usr/bin/rclone-tui" "$@"
-          EOF
+            cat <<'EOF' | sed 's/^ *//' > AppDir/AppRun
+            #!/bin/sh
+            SELF=$(readlink -f "$0")
+            HERE=$(dirname "$SELF")
+            exec "$HERE/usr/bin/rclone-tui" "$@"
+            EOF
             chmod +x AppDir/AppRun
             
-            cat <<EOF > AppDir/rclone-tui.desktop
-          [Desktop Entry]
-          Type=Application
-          Name=Rclone TUI
-          Comment=Rclone Terminal User Interface Dashboard
-          Exec=rclone-tui
-          Icon=rclone-tui
-          Categories=Utility;
-          EOF
+            cat <<EOF | sed 's/^ *//' > AppDir/rclone-tui.desktop
+            [Desktop Entry]
+            Type=Application
+            Name=Rclone TUI
+            Comment=Rclone Terminal User Interface Dashboard
+            Exec=rclone-tui
+            Icon=rclone-tui
+            Categories=Utility;
+            EOF
             
             touch AppDir/rclone-tui.png
             
