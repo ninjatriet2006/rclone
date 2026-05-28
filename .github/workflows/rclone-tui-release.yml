@@ -118,7 +118,6 @@ jobs:
       - name: Build Linux Packages (.deb, .rpm, .AppImage)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          exec > packaging.log 2>&1
           set -x
           sudo apt-get update && sudo apt-get install -y alien rpm
           
@@ -155,7 +154,7 @@ jobs:
           
           # Convert .deb to .rpm
           sudo alien --to-rpm --nodeps rclone-tui-linux-$DEB_ARCH.deb
-          mv rclone-tui-*.rpm rclone-tui-linux-$RPM_ARCH.rpm
+          sudo mv rclone-tui-*.rpm rclone-tui-linux-$RPM_ARCH.rpm
           
           # Build AppImage (only for x86_64 to ensure tool compatibility)
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
@@ -197,7 +196,6 @@ jobs:
 
       # Upload Artifacts to Action Run
       - name: Upload Artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -207,7 +205,6 @@ jobs:
             *.deb
             *.rpm
             *.AppImage
-            packaging.log
 
   release:
     name: Create GitHub Release
