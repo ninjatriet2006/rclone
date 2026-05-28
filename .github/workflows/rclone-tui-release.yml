@@ -1,0 +1,115 @@
+name: Build and Release Rclone TUI
+
+on:
+  push:
+    tags:
+      - 'tui-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: rclone-tui-linux-amd64.tar.gz
+            binary_name: rclone-tui
+            command_archive: tar -czf ../rclone-tui-linux-amd64.tar.gz rclone-tui
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: rclone-tui-windows-amd64.zip
+            binary_name: rclone-tui.exe
+            command_archive: tar -a -c -f ..\rclone-tui-windows-amd64.zip rclone-tui.exe
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # CGO on Windows requires gcc. We setup MSYS2 / MinGW to get it.
+      - name: Set up MinGW (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-toolchain
+
+      - name: Add GCC to PATH (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+
+      # Compile librclone as C-archive (static library)
+      # Located in the root of the repo (parent of rclone-tui)
+      - name: Compile Go librclone (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+
+      - name: Compile Go librclone (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          go build -buildmode=c-archive -o rclone.lib github.com/rclone/rclone/librclone
+
+      # Compile the Rust TUI in release mode
+      - name: Build Rust rclone-tui
+        run: |
+          cd rclone-tui
+          cargo build --release --target ${{ matrix.target }}
+
+      # Package the binary
+      - name: Archive Binary
+        shell: bash
+        run: |
+          mkdir -p build_out
+          cp rclone-tui/target/${{ matrix.target }}/release/${{ matrix.binary_name }} build_out/
+          cd build_out
+          ${{ matrix.command_archive }}
+
+      # Upload Artifact to Action Run
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_artifacts
+          merge-multiple: true
+
+      - name: Display downloaded files
+        run: ls -R release_artifacts
+
+      - name: Publish Release on GitHub
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release_artifacts/rclone-tui-linux-amd64.tar.gz
+            release_artifacts/rclone-tui-windows-amd64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
