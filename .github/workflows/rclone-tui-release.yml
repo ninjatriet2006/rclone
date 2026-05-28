@@ -49,6 +49,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       # Install cross compiler for Linux ARM64
@@ -90,11 +91,14 @@ jobs:
 
       - name: Compile Go librclone (Windows ARM64)
         if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
         run: |
-          $env:CGO_ENABLED="1"
-          $env:CC="clang"
+          # Option A: disable cgo for this cross-build on windows-latest (amd64)
+          $env:CGO_ENABLED="0"
           $env:GOOS="windows"
           $env:GOARCH="arm64"
+
+          go env
           go build -buildmode=c-archive -o rclone.lib github.com/rclone/rclone/librclone
 
       # Compile the Rust TUI in release mode
@@ -139,7 +143,7 @@ jobs:
           PKG_VERSION=$(echo "${{ github.ref_name }}" | sed 's/tui-v//')
           
           # Write control file
-          cat <<EOF | sed 's/^ *//' > pkg_build/DEBIAN/control
+          cat > pkg_build/DEBIAN/control <<EOF
           Package: rclone-tui
           Version: $PKG_VERSION
           Section: utils
@@ -165,31 +169,33 @@ jobs:
             mkdir -p AppDir/usr/bin
             cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui AppDir/usr/bin/
             
-            cat <<'EOF' | sed 's/^ *//' > AppDir/AppRun
-            #!/bin/sh
-            SELF=$(readlink -f "$0")
-            HERE=$(dirname "$SELF")
-            exec "$HERE/usr/bin/rclone-tui" "$@"
-            EOF
+            # Create AppRun
+            cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          SELF=$(readlink -f "$0")
+          HERE=$(dirname "$SELF")
+          exec "$HERE/usr/bin/rclone-tui" "$@"
+          EOF
             chmod +x AppDir/AppRun
             
-            cat <<EOF | sed 's/^ *//' > AppDir/rclone-tui.desktop
-            [Desktop Entry]
-            Type=Application
-            Name=Rclone TUI
-            Comment=Rclone Terminal User Interface Dashboard
-            Exec=rclone-tui
-            Icon=rclone-tui
-            Categories=Utility;
-            EOF
+            # Create desktop file
+            cat > AppDir/rclone-tui.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Rclone TUI
+          Comment=Rclone Terminal User Interface Dashboard
+          Exec=rclone-tui
+          Icon=rclone-tui
+          Categories=Utility;
+          EOF
             
-            # Create a simple valid SVG icon for the AppImage
-            cat <<EOF | sed 's/^ *//' > AppDir/rclone-tui.svg
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-              <rect width="100" height="100" fill="#2d3748" rx="20"/>
-              <text x="50" y="65" font-family="monospace" font-weight="bold" font-size="50" fill="#f7fafc" text-anchor="middle">R</text>
-            </svg>
-            EOF
+            # Create SVG icon
+            cat > AppDir/rclone-tui.svg <<EOF
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect width="100" height="100" fill="#2d3748" rx="20"/>
+            <text x="50" y="65" font-family="monospace" font-weight="bold" font-size="50" fill="#f7fafc" text-anchor="middle">R</text>
+          </svg>
+          EOF
             
             ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir rclone-tui-linux-x86_64.AppImage
           fi
