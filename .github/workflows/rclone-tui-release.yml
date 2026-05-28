@@ -25,7 +25,7 @@ jobs:
             binary_name: rclone-tui
             command_archive: tar -czf ../rclone-tui-linux-arm64.tar.gz rclone-tui
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-gnu
             artifact_name: rclone-tui-windows-amd64
             binary_name: rclone-tui.exe
             command_archive: tar -a -c -f ..\rclone-tui-windows-amd64.zip rclone-tui.exe
@@ -56,14 +56,14 @@ jobs:
 
       # CGO on Windows requires gcc/clang. We setup MSYS2 / MinGW to get it for Windows x64.
       - name: Set up MinGW (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         uses: msys2/setup-msys2@v2
         with:
           update: true
           install: mingw-w64-x86_64-toolchain
 
       - name: Add GCC to PATH (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         run: |
           echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
 
@@ -80,9 +80,9 @@ jobs:
           CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
       - name: Compile Go librclone (Windows x64)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: matrix.target == 'x86_64-pc-windows-gnu'
         run: |
-          go build -buildmode=c-archive -o rclone.lib github.com/rclone/rclone/librclone
+          go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
       # Compile the Rust TUI in release mode
       - name: Build Rust rclone-tui
