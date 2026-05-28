@@ -118,6 +118,8 @@ jobs:
       - name: Build Linux Packages (.deb, .rpm, .AppImage)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          exec > packaging.log 2>&1
+          set -x
           sudo apt-get update && sudo apt-get install -y alien rpm
           
           # Detect architecture for package naming
@@ -195,6 +197,7 @@ jobs:
 
       # Upload Artifacts to Action Run
       - name: Upload Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
@@ -204,6 +207,7 @@ jobs:
             *.deb
             *.rpm
             *.AppImage
+            packaging.log
 
   release:
     name: Create GitHub Release
