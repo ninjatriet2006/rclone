@@ -19,14 +19,13 @@ Tài liệu này tổng hợp các kinh nghiệm thực tế và giải pháp k�
 ### 1.2. Rào cản CGO khi biên dịch chéo
 * Khi dự án sử dụng các thư viện Go có kích hoạt CGO (`CGO_ENABLED=1`) để tạo static library (`-buildmode=c-archive`), Go yêu cầu một trình biên dịch C (GCC/Clang) đích tương thích với kiến trúc CPU đích.
 * **Linux ARM64**: Cross-compile rất dễ dàng bằng cách cài đặt gói `gcc-aarch64-linux-gnu` trên Ubuntu runner và thiết lập `CC=aarch64-linux-gnu-gcc`.
-* **Windows ARM64**: Cross-compile cực kỳ phức tạp do xung đột ABI giữa định dạng `.lib` sinh ra bởi trình biên dịch chéo (như Clang) và trình liên kết MSVC (`link.exe`) của Rust, dẫn đến lỗi định dạng `LNK4003`. 
-  * *Giải pháp đề xuất*: Loại bỏ `aarch64-pc-windows-msvc` khỏi ma trận build nếu không có máy native ARM64 làm self-hosted runner, vì Windows ARM64 có khả năng giả lập chạy file `.exe` x64 rất tốt.
+  * **Windows ARM64**: Biên dịch chéo sang target `aarch64-pc-windows-gnullvm` (MinGW + LLVM) thay vì `msvc` để đồng nhất với Go CGO build. Việc cài đặt và cấu hình toolchain rất dễ gặp lỗi do đường dẫn cài đặt ảo hóa và xung đột chế độ Clang driver (MSVC mode vs MinGW mode).
 
 ---
 
-## 2. Đồng Bộ Hóa Toolchain Windows: Tránh Trộn Lẫn MSVC và GNU
+## 2. Đồng Bộ Hóa Toolchain Windows: Tránh Trộn Lẫn MSVC và GNU/GNULLVM
 
-Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên Windows x86_64, việc trộn lẫn trình biên dịch sẽ gây ra các lỗi liên kết nghiêm trọng.
+Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên Windows, việc trộn lẫn trình biên dịch sẽ gây ra các lỗi liên kết nghiêm trọng.
 
 ### 2.1. Các lỗi thường gặp khi trộn lẫn toolchain (MinGW Go + MSVC Rust)
 1. **Lỗi `LNK1223: invalid or corrupt file: file contains invalid .pdata contributions`**:
@@ -34,7 +33,7 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
 2. **Lỗi `LNK2019: unresolved external symbol fprintf referenced in function _cgo_beginthread`**:
    * *Nguyên nhân*: Hàm `fprintf` được inline hoàn toàn vào header trong modern MSVC CRT (UCRT), nhưng file object sinh ra bởi GCC vẫn coi nó là một biểu tượng (symbol) liên kết ngoài.
 
-### 2.2. Giải pháp: Sử dụng Target Windows GNU (`x86_64-pc-windows-gnu`)
+### 2.2. Giải pháp cho Windows x64: Sử dụng Target Windows GNU (`x86_64-pc-windows-gnu`)
 Để giải quyết triệt để tất cả các xung đột ABI trên, ta chuyển toàn bộ quy trình biên dịch trên Windows sang hệ sinh thái **GNU (MinGW)**:
 
 * **Thay đổi Target của Rust**: Thay thế `x86_64-pc-windows-msvc` bằng **`x86_64-pc-windows-gnu`**.
@@ -53,6 +52,43 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
       echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
   ```
 * **Định dạng file thư viện đầu ra của Go**: Đổi tên file static library từ `rclone.lib` thành **`librclone.a`** để trình liên kết GCC tự động nhận diện chuẩn xác.
+
+### 2.3. Hướng dẫn cấu hình Windows ARM64 (`aarch64-pc-windows-gnullvm`)
+
+Để build Windows ARM64 thành công trên runner x86_64 mà không dùng MSVC, ta sử dụng target `gnullvm` cùng bộ Clang/LLVM từ MSYS2. Dưới đây là các lưu ý quan trọng để tránh lỗi:
+
+#### 1. Dùng đường dẫn động của MSYS2 thay vì ổ cứng (`C:\msys64`)
+* **Lỗi**: `cgo: C compiler "C:/msys64/clangarm64/bin/clang" not found`.
+* **Nguyên nhân**: Trên Windows runner của GitHub Actions, MSYS2 có thể được cài tại `D:\a\msys64` (hoặc thư mục temp chạy) thay vì `C:\msys64`.
+* **Giải pháp**: Gán `id` cho step setup MSYS2 và sử dụng output `${{ steps.msys2.outputs.msys2-location }}`:
+  ```yaml
+  - name: Set up MinGW (Windows ARM64)
+    id: msys2
+    uses: msys2/setup-msys2@v2
+    with:
+      msystem: CLANGARM64
+      update: true
+      install: mingw-w64-clang-aarch64-toolchain
+
+  - name: Add GCC/Clang to PATH (Windows ARM64)
+    shell: pwsh
+    run: |
+      "$("${{ steps.msys2.outputs.msys2-location }}")\clangarm64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+  ```
+
+#### 2. Chỉ định tuyệt đối đường dẫn Clang compiler của MSYS2
+* **Lỗi**: `lld-link: error: could not open 'unwind.lib'` (hoặc `mingw32.lib`, `mingwex.lib`).
+* **Nguyên nhân**: Lệnh `clang` mặc định trên runner trỏ về phiên bản MSVC-mode của Visual Studio (dẫn tới việc dùng `lld-link` tìm các file `.lib` giả định).
+* **Giải pháp**: Sử dụng shell `bash` để tránh lỗi cú pháp và trỏ trực tiếp biến `CC` cùng linker của Rust về Clang của MSYS2:
+  ```yaml
+  # Cấu hình cho Go CGO
+  env:
+    CC: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
+  
+  # Cấu hình trình liên kết (linker) cho Cargo
+  env:
+    CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
+  ```
 
 ---
 
