@@ -75,6 +75,7 @@ jobs:
       # CGO on Windows ARM64 requires LLVM/Clang from MSYS2. We setup MSYS2 CLANGARM64 to get it.
       - name: Set up MinGW (Windows ARM64)
         if: matrix.target == 'aarch64-pc-windows-gnullvm'
+        id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: CLANGARM64
@@ -83,8 +84,9 @@ jobs:
 
       - name: Add GCC/Clang to PATH (Windows ARM64)
         if: matrix.target == 'aarch64-pc-windows-gnullvm'
+        shell: pwsh
         run: |
-          echo "C:\msys64\clangarm64\bin" >> $env:GITHUB_PATH
+          "$("${{ steps.msys2.outputs.msys2-location }}")\clangarm64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       # Compile librclone as C-archive (static library)
       # Located in the root of the repo (parent of rclone-tui)
@@ -113,7 +115,7 @@ jobs:
         run: |
           go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
         env:
-          CC: /c/msys64/clangarm64/bin/clang
+          CC: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
           GOOS: windows
           GOARCH: arm64
           CGO_ENABLED: '1'
@@ -123,7 +125,7 @@ jobs:
         if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
         shell: bash
         env:
-          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: /c/msys64/clangarm64/bin/clang
+          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
