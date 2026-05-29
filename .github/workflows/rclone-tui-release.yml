@@ -19,7 +19,7 @@ jobs:
             artifact_name: rclone-tui-linux-amd64
             binary_name: rclone-tui
             command_archive: tar -czf ../rclone-tui-linux-amd64.tar.gz rclone-tui
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: rclone-tui-linux-arm64
             binary_name: rclone-tui
@@ -28,7 +28,12 @@ jobs:
             target: x86_64-pc-windows-gnu
             artifact_name: rclone-tui-windows-amd64
             binary_name: rclone-tui.exe
-            command_archive: tar -a -c -f ..\rclone-tui-windows-amd64.zip rclone-tui.exe
+            command_archive: tar -a -c -f ../rclone-tui-windows-amd64.zip rclone-tui.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+            artifact_name: rclone-tui-windows-arm64
+            binary_name: rclone-tui.exe
+            command_archive: tar -a -c -f ../rclone-tui-windows-arm64.zip rclone-tui.exe
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -47,9 +52,9 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      # Install cross compiler for Linux ARM64
+      # Install cross compiler for Linux ARM64 (only if cross-compiling, not on native ARM64 runners)
       - name: Install ARM64 GCC (Linux ARM64 cross-compile)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.arch != 'ARM64'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -67,6 +72,20 @@ jobs:
         run: |
           echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
 
+      # CGO on Windows ARM64 requires LLVM/Clang from MSYS2. We setup MSYS2 CLANGARM64 to get it.
+      - name: Set up MinGW (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-gnullvm'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: mingw-w64-clang-aarch64-toolchain
+
+      - name: Add GCC/Clang to PATH (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-gnullvm'
+        run: |
+          echo "C:\msys64\clangarm64\bin" >> $env:GITHUB_PATH
+
       # Compile librclone as C-archive (static library)
       # Located in the root of the repo (parent of rclone-tui)
       - name: Compile Go librclone (Linux x64)
@@ -77,17 +96,30 @@ jobs:
       - name: Compile Go librclone (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+          else
+            CGO_ENABLED=1 CC=aarch64-linux-gnu-gcc GOOS=linux GOARCH=arm64 go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+          fi
 
       - name: Compile Go librclone (Windows x64)
         if: matrix.target == 'x86_64-pc-windows-gnu'
         run: |
           go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
+      - name: Compile Go librclone (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-gnullvm'
+        run: |
+          go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+        env:
+          CC: clang
+          CGO_ENABLED: '1'
+
       # Compile the Rust TUI in release mode
       - name: Build Rust rclone-tui
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ (runner.arch != 'ARM64' && matrix.target == 'aarch64-unknown-linux-gnu') && 'aarch64-linux-gnu-gcc' || '' }}
+          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: clang
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
@@ -103,7 +135,7 @@ jobs:
 
       # Build .deb, .rpm, .AppImage (Linux only)
       - name: Build Linux Packages (.deb, .rpm, .AppImage)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           set -x
           sudo apt-get update && sudo apt-get install -y alien rpm
