@@ -113,6 +113,8 @@ jobs:
           go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
         env:
           CC: clang
+          GOOS: windows
+          GOARCH: arm64
           CGO_ENABLED: '1'
 
       # Compile the Rust TUI in release mode (native / non-cross-compiled)
@@ -120,6 +122,7 @@ jobs:
         if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
         env:
           CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: clang
+          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_RUSTFLAGS: -l dylib=unwind
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
