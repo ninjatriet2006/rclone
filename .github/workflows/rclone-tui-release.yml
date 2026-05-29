@@ -115,11 +115,20 @@ jobs:
           CC: clang
           CGO_ENABLED: '1'
 
-      # Compile the Rust TUI in release mode
+      # Compile the Rust TUI in release mode (native / non-cross-compiled)
       - name: Build Rust rclone-tui
+        if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ (runner.arch != 'ARM64' && matrix.target == 'aarch64-unknown-linux-gnu') && 'aarch64-linux-gnu-gcc' || '' }}
           CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: clang
+        run: |
+          cd rclone-tui
+          cargo build --release --target ${{ matrix.target }}
+
+      # Compile the Rust TUI in release mode (Linux aarch64 cross-compile on x64 host)
+      - name: Build Rust rclone-tui (aarch64-linux-gnu cross-compile)
+        if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.arch != 'ARM64'
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
