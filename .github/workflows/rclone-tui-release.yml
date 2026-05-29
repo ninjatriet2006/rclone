@@ -111,6 +111,7 @@ jobs:
         if: matrix.target == 'aarch64-pc-windows-gnullvm'
         run: |
           go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
+          cp librclone.a rclone.lib
         env:
           CC: clang
           GOOS: windows
@@ -122,7 +123,6 @@ jobs:
         if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
         env:
           CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: clang
-          CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_RUSTFLAGS: -l dylib=unwind
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
