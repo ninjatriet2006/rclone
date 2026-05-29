@@ -137,11 +137,6 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
 
 ## 4. Giao Thức Tự Tiến Hóa & Cập Nhật Skill (Self-Evolution Protocol)
 
-Để bộ cẩm nang quy chuẩn này luôn cập nhật và phát triển theo dự án:
+Tệp tài liệu kỹ năng này tuân thủ giao thức tự tiến hóa chung của dự án. Quy trình cập nhật bài học kinh nghiệm và đồng bộ hóa tri thức giữa các phiên làm việc được thực hiện theo quy chuẩn tại [self-evolution-skill.md](file:///home/bimatkeo/Rclone_Clone/rclone/rclone-tui/self-evolution-skill.md).
 
-1. **Quy trình Sửa lỗi và Cập nhật**:
-   * Khi Agent phát hiện bất kỳ lỗi cấu hình CI/CD (GitHub Actions), lỗi biên dịch chéo CGO, hay các lỗi liên quan đến môi trường runner ảo hóa, Agent bắt buộc phải khắc phục trong mã nguồn trước.
-   * Sau khi khắc phục thành công, Agent bắt buộc phải cập nhật nguyên nhân và giải pháp sửa lỗi trực tiếp vào tệp này (`github-free-tier-solve-skill.md`) tại các mục tương ứng hoặc tạo thêm mục khắc phục sự cố mới.
-2. **Đồng bộ liên tục**:
-   * Tệp này giúp các Agent ở các phiên làm việc tiếp theo tự động kế thừa bài học kinh nghiệm, tránh lặp lại các lỗi tương tự và duy trì tính ổn định của quy trình CI/CD.
 
