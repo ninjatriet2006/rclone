@@ -15,6 +15,10 @@ pub struct TransferJob {
     pub percentage: u16,
     pub eta: i64,
     pub job_id: Option<i64>,
+    pub start_time: String,
+    pub duration: f64,
+    pub group: String,
+    pub description: String,
 }
 
 pub struct MonitorState {
@@ -57,6 +61,13 @@ impl MonitorState {
     }
 }
 
+fn make_progress_bar(percentage: u16, width: usize) -> String {
+    let capped = percentage.min(100) as usize;
+    let filled = (capped * width) / 100;
+    let empty = width.saturating_sub(filled);
+    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+}
+
 pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -70,7 +81,9 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
 
     // 1. Vẽ Tổng quan tiến trình
     let speed_str = format!("{}/s", super::format_size(state.speed as u64));
-    let progress_pct = if state.total_bytes > 0 {
+    let progress_pct = if state.active_jobs.is_empty() {
+        100.0
+    } else if state.total_bytes > 0 {
         (state.bytes_transferred as f64 / state.total_bytes as f64) * 100.0
     } else {
         0.0
@@ -95,11 +108,18 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                 super::format_size(state.total_bytes),
                 Style::default().fg(Color::Cyan),
             ),
+            Span::raw(" | PID Engine: "),
+            Span::styled(
+                std::process::id().to_string(),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::raw(crate::lang::translate("mon_total_pct_label")),
             Span::styled(
-                format!("{:.1}%", progress_pct),
+                format!("{} {:.1}%", make_progress_bar(progress_pct as u16, 25), progress_pct),
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -135,13 +155,47 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
             };
 
             let line = if let Some(_id) = job.job_id {
-                Line::from(vec![
+                let bar = make_progress_bar(job.percentage, 15);
+                let eta_str = if job.eta >= 0 {
+                    format!("ETA: {}s", job.eta)
+                } else {
+                    "ETA: --".to_string()
+                };
+
+                let mut spans = vec![
                     Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(format!(" {} ", bar), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("{}% ", job.percentage),
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         format!("{} ", job.name),
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
-                ])
+                ];
+
+                if job.size > 0 {
+                    spans.push(Span::styled(
+                        format!(
+                            "({} / {}) ",
+                            super::format_size(job.bytes),
+                            super::format_size(job.size)
+                        ),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+
+                spans.push(Span::styled(
+                    format!("{} - ", eta_str),
+                    Style::default().fg(Color::Magenta),
+                ));
+                spans.push(Span::styled(
+                    format!("{}/s", super::format_size(job.speed)),
+                    Style::default().fg(Color::Yellow),
+                ));
+
+                Line::from(spans)
             } else {
                 let eta_str = if job.eta >= 0 {
                     format!("ETA: {}s", job.eta)
@@ -149,8 +203,13 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                     "ETA: --".to_string()
                 };
 
+                let bar = make_progress_bar(job.percentage, 15);
                 Line::from(vec![
-                    Span::raw(format!("  {}% ", job.percentage)),
+                    Span::styled(format!(" {} ", bar), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("{}% ", job.percentage),
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         format!("{} ", job.name),
                         Style::default().add_modifier(Modifier::BOLD),
@@ -190,33 +249,86 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
     let active_list = List::new(active_items).block(active_block);
     frame.render_widget(active_list, chunks[1]);
 
-    // 3. Vẽ lịch sử truyền tải (History Logs)
-    // Giới hạn hiển thị lịch sử gần nhất để tránh lag (Bug 96)
-    let history_items: Vec<ListItem> = state
-        .history
-        .iter()
-        .rev()
-        .take(50)
-        .map(|log| ListItem::new(Span::raw(log)))
-        .collect();
-
-    let history_block = Block::default()
+    // 3. Vẽ nhật ký debug/chi tiết tác vụ đang chọn
+    let details_block = Block::default()
         .title(Span::styled(
-            crate::lang::translate("mon_history_title"),
+            " NHẬT KÝ DEBUG & CHI TIẾT TÁC VỤ ĐANG CHỌN ",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-    let history_list = List::new(history_items).block(history_block);
-    frame.render_widget(history_list, chunks[2]);
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let details_text = if state.active_jobs.is_empty() {
+        vec![Line::from(vec![
+            Span::styled("[DEBUG] Không có tác vụ rclone nào đang chạy.", Style::default().fg(Color::Gray)),
+        ])]
+    } else if state.selected_job_idx < state.active_jobs.len() {
+        let job = &state.active_jobs[state.selected_job_idx];
+        let mut lines = Vec::new();
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "[DEBUG] Tác vụ: {} | Job ID: {}",
+                    job.name,
+                    job.job_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "Không có".to_string())
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
+
+        if job.job_id.is_some() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        "[DEBUG] Nhóm thống kê: {} | Bắt đầu: {} | Đã chạy: {:.1}s",
+                        job.group, job.start_time, job.duration
+                    ),
+                    Style::default().fg(Color::Gray),
+                ),
+            ]));
+        }
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "[DEBUG] Tiến độ: {}% | Tốc độ: {}/s | Truyền tải: {} / {}",
+                    job.percentage,
+                    super::format_size(job.speed),
+                    super::format_size(job.bytes),
+                    super::format_size(job.size)
+                ),
+                Style::default().fg(Color::Green),
+            ),
+        ]));
+
+        if !job.description.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("[DEBUG] Lệnh/Mô tả đầy đủ: {}", job.description),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+        }
+
+        lines
+    } else {
+        vec![Line::from(vec![
+            Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Gray)),
+        ])]
+    };
+
+    let details_paragraph = Paragraph::new(details_text).block(details_block);
+    frame.render_widget(details_paragraph, chunks[2]);
 
     // Help Bar
     let help_paragraph = Paragraph::new(
-        crate::lang::translate("mon_help"),
+        super::parse_help_line(&crate::lang::translate("mon_help")),
     )
-    .style(Style::default().fg(Color::DarkGray))
     .block(
         Block::default()
             .borders(Borders::ALL)

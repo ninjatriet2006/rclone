@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
@@ -124,4 +124,82 @@ pub fn calculate_scroll_range(selected_idx: usize, total_items: usize, height: u
     };
     let end = std::cmp::min(total_items, scroll_offset + height);
     scroll_offset..end
+}
+
+/// Phân tích cú pháp dòng hướng dẫn (dạng [Key]Action|[Key]Action)
+/// thành một đối tượng Line chứa nhiều Span được tô màu sắc tương phản để dễ đọc.
+pub fn parse_help_line(help_text: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let parts: Vec<&str> = help_text.split('|').collect();
+    for (idx, part) in parts.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        }
+
+        if let Some(start_idx) = part.find('[') {
+            if let Some(end_idx) = part.find(']') {
+                if start_idx < end_idx {
+                    // Phần tiền tố trước dấu '[' (nếu có)
+                    if start_idx > 0 {
+                        spans.push(Span::styled(part[..start_idx].to_string(), Style::default().fg(Color::DarkGray)));
+                    }
+                    // Phần phím tắt nằm trong ngoặc vuông (ví dụ: [Alt+R])
+                    let key_text = &part[start_idx..=end_idx];
+                    spans.push(Span::styled(
+                        key_text.to_string(),
+                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    ));
+                    // Phần nhãn mô tả sau dấu ']' (ví dụ: Remote)
+                    let desc_text = &part[end_idx + 1..];
+                    spans.push(Span::styled(desc_text.to_string(), Style::default()));
+                    continue;
+                }
+            }
+        }
+        // Trường hợp fallback nếu không đúng cấu trúc
+        spans.push(Span::styled(part.to_string(), Style::default()));
+    }
+    Line::from(spans)
+}
+
+/// Ước lượng số dòng cần thiết để hiển thị chuỗi trợ giúp đã được wrap theo chiều rộng có sẵn.
+pub fn estimate_wrapped_lines(help_text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    // Chuyển đổi chuỗi trợ giúp (dạng ngăn cách bởi |) sang chuỗi hiển thị thực tế
+    let parsed_text = help_text.replace('|', " | ");
+    let mut lines = 1;
+    let mut current_line_len = 0;
+    
+    for word in parsed_text.split_whitespace() {
+        let word_len = word.chars().count();
+        if current_line_len == 0 {
+            current_line_len = word_len;
+        } else if current_line_len + 1 + word_len <= width {
+            current_line_len += 1 + word_len;
+        } else {
+            lines += 1;
+            current_line_len = word_len;
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_estimate_wrapped_lines() {
+        let help_text = "[Tab]Chuyển đổi khung|[Enter/BS]Vào/Lùi|[Alt+R]Remote|[Alt+Y]Đổi tên|[Ctrl+C/V]Sao chép/Dán|[Ctrl+X]Di chuyển|[Delete]Xóa|[Alt+N]Thư mục mới|[Alt+T]Đồng bộ|[Alt+V]Chọn đơn|[Shift+V]Chọn vùng|[Alt+O]Chức năng khác|[ESC]Quay lại";
+        
+        // Rất rộng thì chỉ cần 1 dòng
+        let lines_large = estimate_wrapped_lines(help_text, 1000);
+        assert_eq!(lines_large, 1);
+
+        // Chiều rộng bình thường thì sẽ wrap thành nhiều dòng
+        let lines_normal = estimate_wrapped_lines(help_text, 100);
+        assert!(lines_normal > 1);
+    }
 }

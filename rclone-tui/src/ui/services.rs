@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    Frame,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,8 @@ pub enum ServiceType {
     WebGui,
     Serve,
 }
+
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServicesWizardState {
@@ -134,6 +136,7 @@ pub struct ServicesState {
     pub info_message: Option<String>,
     pub all_remotes: Vec<String>,
     pub selecting_remote: Option<usize>,
+
 }
 
 impl ServicesState {
@@ -156,6 +159,7 @@ impl ServicesState {
             info_message: None,
             all_remotes: Vec::new(),
             selecting_remote: None,
+
         }
     }
 
@@ -189,7 +193,8 @@ impl ServicesState {
 
     pub fn next_systemd(&mut self) {
         if !self.systemd_services.is_empty() {
-            self.selected_systemd_idx = (self.selected_systemd_idx + 1) % self.systemd_services.len();
+            self.selected_systemd_idx =
+                (self.selected_systemd_idx + 1) % self.systemd_services.len();
         }
     }
 
@@ -250,7 +255,13 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if state.active_focus == 0 && state.wizard == ServicesWizardState::None { Color::Magenta } else { Color::DarkGray }));
+        .border_style(Style::default().fg(
+            if state.active_focus == 0 && state.wizard == ServicesWizardState::None {
+                Color::Magenta
+            } else {
+                Color::DarkGray
+            },
+        ));
     let menu_list = List::new(menu_items).block(menu_block);
     frame.render_widget(menu_list, content_chunks[0]);
 
@@ -275,7 +286,11 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
 
     // 2. Vẽ danh sách các tiến trình dịch vụ TUI đang hoạt động
     let active_h = right_chunks[0].height.saturating_sub(2) as usize;
-    let active_range = super::calculate_scroll_range(state.selected_active_idx, state.active_services.len(), active_h);
+    let active_range = super::calculate_scroll_range(
+        state.selected_active_idx,
+        state.active_services.len(),
+        active_h,
+    );
     let active_items: Vec<ListItem> = state.active_services[active_range.clone()]
         .iter()
         .enumerate()
@@ -328,7 +343,11 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
     if show_systemd {
         // 3. Vẽ danh sách Dịch vụ hệ thống (Systemd)
         let sys_h = right_chunks[1].height.saturating_sub(2) as usize;
-        let sys_range = super::calculate_scroll_range(state.selected_systemd_idx, state.systemd_services.len(), sys_h);
+        let sys_range = super::calculate_scroll_range(
+            state.selected_systemd_idx,
+            state.systemd_services.len(),
+            sys_h,
+        );
         let sys_items: Vec<ListItem> = state.systemd_services[sys_range.clone()]
             .iter()
             .enumerate()
@@ -367,16 +386,28 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
                 } else {
                     crate::lang::translate("srv_tag_system")
                 };
-                let level_color = if s.is_user { Color::Magenta } else { Color::Blue };
+                let level_color = if s.is_user {
+                    Color::Magenta
+                } else {
+                    Color::Blue
+                };
 
                 let mut line_spans = vec![
                     Span::styled(status_icon, Style::default().fg(status_color)),
-                    Span::styled(format!("{}{} ", s.name, level_tag), Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!("{}{} ", s.name, level_tag),
+                        Style::default()
+                            .fg(level_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ];
 
                 if !s.description.is_empty() {
                     line_spans.push(Span::raw("| "));
-                    line_spans.push(Span::styled(&s.description, Style::default().fg(Color::Cyan)));
+                    line_spans.push(Span::styled(
+                        &s.description,
+                        Style::default().fg(Color::Cyan),
+                    ));
                 }
 
                 line_spans.push(Span::raw(format!(" ({})", status_text)));
@@ -405,23 +436,21 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
 
     // Help Bar
     let help_text = match &state.wizard {
-        ServicesWizardState::None => {
-            match state.active_focus {
-                0 => crate::lang::translate("srv_help_t0"),
-                1 => crate::lang::translate("srv_help_t1"),
-                _ => crate::lang::translate("srv_help_t2"),
-            }
-        }
+        ServicesWizardState::None => match state.active_focus {
+            0 => crate::lang::translate("srv_help_t0"),
+            1 => crate::lang::translate("srv_help_t1"),
+            _ => crate::lang::translate("srv_help_t2"),
+        },
         ServicesWizardState::SelectSystemdAction { .. } => {
             crate::lang::translate("srv_help_action")
         }
-        ServicesWizardState::EditSystemdService { .. } | ServicesWizardState::CreateSystemdService { .. } => {
+        ServicesWizardState::EditSystemdService { .. }
+        | ServicesWizardState::CreateSystemdService { .. } => {
             crate::lang::translate("srv_help_edit")
         }
-        _ => crate::lang::translate("srv_help_general")
+        _ => crate::lang::translate("srv_help_general"),
     };
-    let help_paragraph = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+    let help_paragraph = Paragraph::new(super::parse_help_line(&help_text))
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -462,6 +491,7 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
             loading,
             error_msg,
             creating_folder,
+            ..
         } => {
             draw_gui_select_path(
                 frame,
@@ -592,7 +622,13 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
     if let Some(ref err) = state.error_message {
         super::draw_popup(frame, " LỖI DỊCH VỤ ", err, 60, 30);
     } else if let Some(ref info) = state.info_message {
-        super::draw_popup(frame, &crate::lang::translate("srv_info_title"), info, 60, 30);
+        super::draw_popup(
+            frame,
+            &crate::lang::translate("srv_info_title"),
+            info,
+            60,
+            30,
+        );
     }
 }
 
@@ -648,7 +684,11 @@ fn draw_select_remote(
 
     let height = area.height.saturating_sub(2) as usize;
     let range = super::calculate_scroll_range(selected_idx, items.len(), height);
-    let visible_items: Vec<ListItem> = items.into_iter().skip(range.start).take(range.end - range.start).collect();
+    let visible_items: Vec<ListItem> = items
+        .into_iter()
+        .skip(range.start)
+        .take(range.end - range.start)
+        .collect();
 
     let list = List::new(visible_items).block(block);
     frame.render_widget(list, area);
@@ -665,7 +705,9 @@ fn draw_input_path(
     frame.render_widget(Clear, area);
 
     let prompt = match service_type {
-        ServiceType::Mount | ServiceType::NfsMount => crate::lang::translate("srv_mount_point_prompt"),
+        ServiceType::Mount | ServiceType::NfsMount => {
+            crate::lang::translate("srv_mount_point_prompt")
+        }
         ServiceType::Serve => crate::lang::translate("srv_share_path_prompt"),
         _ => "".to_string(),
     };
@@ -675,7 +717,11 @@ fn draw_input_path(
         Line::from(vec![
             Span::raw(crate::lang::translate("srv_selected_source")),
             Span::styled(
-                if remote.is_empty() { &local_system_label } else { remote },
+                if remote.is_empty() {
+                    &local_system_label
+                } else {
+                    remote
+                },
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -738,8 +784,14 @@ fn draw_select_protocol(frame: &mut Frame, remote: &str, path: &str, selected_id
 
     let block = Block::default()
         .title(Span::styled(
-            crate::lang::translate("srv_select_proto_title")
-                .replace("{}{}", &format!("{}{}", if remote.is_empty() { "Local:" } else { remote }, path)),
+            crate::lang::translate("srv_select_proto_title").replace(
+                "{}{}",
+                &format!(
+                    "{}{}",
+                    if remote.is_empty() { "Local:" } else { remote },
+                    path
+                ),
+            ),
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
@@ -771,7 +823,11 @@ fn draw_ask_flags(
     let mut info_spans = vec![
         Span::raw(crate::lang::translate("srv_config_for")),
         Span::styled(
-            if remote.is_empty() { &local_system_label } else { remote },
+            if remote.is_empty() {
+                &local_system_label
+            } else {
+                remote
+            },
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
@@ -836,11 +892,7 @@ fn draw_ask_flags(
 
 use super::centered_rect;
 
-fn draw_ask_mode(
-    frame: &mut Frame,
-    service_type: &ServiceType,
-    selected_idx: usize,
-) {
+fn draw_ask_mode(frame: &mut Frame, service_type: &ServiceType, selected_idx: usize) {
     let size = frame.size();
     let area = centered_rect(65, 30, size);
     frame.render_widget(Clear, area);
@@ -903,12 +955,30 @@ fn draw_gui_select_path(
     let area = centered_rect(75, 75, size);
     frame.render_widget(Clear, area);
 
+    let help_text = crate::lang::translate("srv_browser_help");
+    let available_width = area.width.saturating_sub(2) as usize;
+    let needed_lines = super::estimate_wrapped_lines(&help_text, available_width);
+
+    let mut help_height = needed_lines.min(3);
+    if help_height > 1 {
+        let temp_help_bar_height = help_height + 2;
+        let list_height = area.height.saturating_sub(3 + temp_help_bar_height as u16);
+        let visible_files_height = list_height.saturating_sub(2);
+        if visible_files_height <= 8 {
+            help_height = 1;
+        }
+    }
+    if help_height == 0 {
+        help_height = 1;
+    }
+    let help_bar_height = help_height + 2;
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Info bar
-            Constraint::Min(5),    // List of directories
-            Constraint::Length(3), // Help bar
+            Constraint::Length(3),                      // Info bar
+            Constraint::Min(5),                         // List of directories
+            Constraint::Length(help_bar_height as u16), // Help bar
         ])
         .split(area);
 
@@ -926,11 +996,15 @@ fn draw_gui_select_path(
     let info_block = Block::default()
         .title(Span::styled(
             crate::lang::translate("srv_browser_title").replace("{}", title_prefix),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Magenta));
-    let info_p = Paragraph::new(info_text).block(info_block).style(Style::default().fg(Color::Cyan));
+    let info_p = Paragraph::new(info_text)
+        .block(info_block)
+        .style(Style::default().fg(Color::Cyan));
     frame.render_widget(info_p, layout[0]);
 
     // 2. Directory List or Loading/Error
@@ -982,11 +1056,12 @@ fn draw_gui_select_path(
     }
 
     // 3. Help block
-    let help_text = crate::lang::translate("srv_browser_help");
     let help_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let help_p = Paragraph::new(help_text).block(help_block).style(Style::default().fg(Color::Gray));
+    let help_p = Paragraph::new(super::parse_help_line(&help_text))
+        .block(help_block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(help_p, layout[2]);
 
     // 4. Create Folder Overlay
@@ -996,7 +1071,9 @@ fn draw_gui_select_path(
         let overlay_block = Block::default()
             .title(Span::styled(
                 crate::lang::translate("srv_browser_new_title"),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow));
@@ -1011,8 +1088,8 @@ fn draw_gui_select_path(
         ];
         let overlay_p = Paragraph::new(overlay_text).block(overlay_block);
         frame.render_widget(overlay_p, overlay_area);
-     }
- }
+    }
+}
 
 fn draw_select_systemd_action(
     frame: &mut Frame,
@@ -1125,20 +1202,32 @@ fn draw_edit_systemd_service_wizard(
 
     // Vẽ Tab Bar
     let basic_style = if active_tab == 0 {
-        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White).bg(Color::DarkGray)
     };
     let adv_style = if active_tab == 1 {
-        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White).bg(Color::DarkGray)
     };
 
     let tab_line = Line::from(vec![
-        Span::styled(crate::lang::translate("srv_systemd_edit_tab_basic"), basic_style),
+        Span::styled(
+            crate::lang::translate("srv_systemd_edit_tab_basic"),
+            basic_style,
+        ),
         Span::raw("   "),
-        Span::styled(crate::lang::translate("srv_systemd_edit_tab_adv"), adv_style),
+        Span::styled(
+            crate::lang::translate("srv_systemd_edit_tab_adv"),
+            adv_style,
+        ),
         Span::raw(crate::lang::translate("srv_systemd_edit_tab_help")),
     ]);
     frame.render_widget(Paragraph::new(tab_line), inner_chunks[0]);
@@ -1159,7 +1248,7 @@ fn draw_edit_systemd_service_wizard(
         .take(height)
         .map(|(i, (name, _, value, _choices))| {
             let (friendly_name, friendly_desc) = translate_systemd_field(name);
-            
+
             let display_val = if i == selected_idx && is_editing {
                 input_buffer.to_string()
             } else {
@@ -1179,21 +1268,36 @@ fn draw_edit_systemd_service_wizard(
                     Color::Black
                 };
 
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(cursor, Style::default().fg(Color::Red)),
                     Span::styled(
                         format!("{}: ", friendly_name),
                         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(display_val, Style::default().fg(fg).bg(bg)),
-                    Span::styled(format!(" - ({})", friendly_desc), Style::default().fg(fg).bg(bg)),
-                ])
+                ];
+                if name == "_remote" || name == "_mount_path" {
+                    spans.push(Span::styled(
+                        crate::lang::translate("srv_insert_gui_hint"),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                spans.push(Span::styled(
+                    format!(" - ({})", friendly_desc),
+                    Style::default().fg(fg).bg(bg),
+                ));
+                Line::from(spans)
             } else {
                 Line::from(vec![
                     Span::raw("    "),
                     Span::styled(
                         format!("{}: ", friendly_name),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(display_val),
                     Span::styled(
@@ -1244,7 +1348,10 @@ fn draw_edit_systemd_service_wizard(
         } else {
             "    "
         }),
-        Span::styled(crate::lang::translate("srv_systemd_edit_cancel"), cancel_style),
+        Span::styled(
+            crate::lang::translate("srv_systemd_edit_cancel"),
+            cancel_style,
+        ),
     ])));
 
     // Thêm dòng lưu ý/mẹo
@@ -1272,7 +1379,12 @@ fn draw_edit_systemd_service_wizard(
         let overlay_area = centered_rect(50, 25, size);
         frame.render_widget(Clear, overlay_area);
         let overlay_block = Block::default()
-            .title(Span::styled(crate::lang::translate("srv_systemd_add_param_title"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+            .title(Span::styled(
+                crate::lang::translate("srv_systemd_add_param_title"),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow));
         let overlay_text = vec![
@@ -1295,12 +1407,12 @@ fn translate_systemd_field(name: &str) -> (String, String) {
     let desc_key = format!("sys_field_{}_desc", raw_key);
     let friendly_name = crate::lang::translate(&name_key);
     let friendly_desc = crate::lang::translate(&desc_key);
-    
+
     // Fallbacks if translation keys don't exist
     let fallback_name = if name.starts_with('[') {
         if let Some(pos) = name.find(']') {
             let sec = &name[1..pos];
-            let key = name[pos+1..].trim();
+            let key = name[pos + 1..].trim();
             format!("[{}] {}", sec, key)
         } else {
             name.to_string()
@@ -1313,14 +1425,14 @@ fn translate_systemd_field(name: &str) -> (String, String) {
             "_mount_path" => "Đường dẫn Mount cục bộ".to_string(),
             "_description" => "Mô tả dịch vụ".to_string(),
             "_user" => "Tài khoản chạy".to_string(),
-            _ => name.to_string()
+            _ => name.to_string(),
         }
     };
-    
+
     let fallback_desc = if name.starts_with('[') {
         if let Some(pos) = name.find(']') {
             let sec = &name[1..pos];
-            let key = name[pos+1..].trim();
+            let key = name[pos + 1..].trim();
             format!("Systemd key [{}] {}", sec, key)
         } else {
             name.to_string()
@@ -1333,12 +1445,19 @@ fn translate_systemd_field(name: &str) -> (String, String) {
             "_mount_path" => "Đường dẫn thư mục trên máy tính của bạn".to_string(),
             "_description" => "Mô tả ngắn gọn về dịch vụ".to_string(),
             "_user" => "Tên tài khoản Linux chạy dịch vụ này".to_string(),
-            _ => name.to_string()
+            _ => name.to_string(),
         }
     };
 
-    let final_name = if friendly_name == name_key { fallback_name } else { friendly_name };
-    let final_desc = if friendly_desc == desc_key { fallback_desc } else { friendly_desc };
+    let final_name = if friendly_name == name_key {
+        fallback_name
+    } else {
+        friendly_name
+    };
+    let final_desc = if friendly_desc == desc_key {
+        fallback_desc
+    } else {
+        friendly_desc
+    };
     (final_name, final_desc)
 }
-

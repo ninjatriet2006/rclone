@@ -22,6 +22,11 @@ pub struct ExplorerPane {
     pub selected_idx: usize,
     pub scroll_offset: usize,
     pub loading: bool,
+    pub selected_names: std::collections::HashSet<String>,
+    pub shift_anchor: Option<usize>,
+    pub alt_anchor: Option<usize>,
+    pub shift_active: bool,
+    pub alt_active: bool,
 }
 
 impl ExplorerPane {
@@ -37,6 +42,11 @@ impl ExplorerPane {
             selected_idx: 0,
             scroll_offset: 0,
             loading: false,
+            selected_names: std::collections::HashSet::new(),
+            shift_anchor: None,
+            alt_anchor: None,
+            shift_active: false,
+            alt_active: false,
         }
     }
 
@@ -103,11 +113,13 @@ pub enum ExplorerPopup {
         src: String,
         dest: String,
         pct: f64,
+        job_id: Option<i64>,
     },
     MoveProgress {
         src: String,
         dest: String,
         pct: f64,
+        job_id: Option<i64>,
     },
     SyncConfirm,
     SelectRemote {
@@ -188,6 +200,7 @@ pub struct ExplorerState {
     pub popup: ExplorerPopup,
     pub error_message: Option<String>,
     pub clipboard: Option<ClipboardItem>,
+    pub clipboard_items: Option<Vec<ClipboardItem>>,
 }
 
 impl ExplorerState {
@@ -199,6 +212,7 @@ impl ExplorerState {
             popup: ExplorerPopup::None,
             error_message: None,
             clipboard: None,
+            clipboard_items: None,
         }
     }
 
@@ -225,12 +239,30 @@ impl ExplorerState {
 }
 
 pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
+    let help_text = crate::lang::translate("exp_help");
+    let available_width = area.width.saturating_sub(2) as usize;
+    let needed_lines = super::estimate_wrapped_lines(&help_text, available_width);
+
+    let mut help_height = needed_lines.min(3);
+    if help_height > 1 {
+        let temp_help_bar_height = help_height + 2;
+        let list_height = area.height.saturating_sub(3 + temp_help_bar_height as u16);
+        let visible_files_height = list_height.saturating_sub(2);
+        if visible_files_height <= 5 {
+            help_height = 1;
+        }
+    }
+    if help_height == 0 {
+        help_height = 1;
+    }
+    let help_bar_height = help_height + 2;
+
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(5),
             Constraint::Length(3), // Console panel
-            Constraint::Length(3), // Help bar
+            Constraint::Length(help_bar_height as u16), // Help bar
         ])
         .split(area);
 
@@ -256,7 +288,21 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
     );
 
     // Console / Status Panel
-    let console_text = if let Some(ref item) = state.clipboard {
+    let console_text = if let Some(ref items) = state.clipboard_items {
+        // Multi-select clipboard
+        let count = items.len();
+        let first_remote = items.first().map(|i| i.remote.clone()).unwrap_or_default();
+        let label = if first_remote.is_empty() {
+            crate::lang::translate("srv_local_system")
+        } else {
+            first_remote.trim_end_matches(':').to_string()
+        };
+        let msg = format!("📋 {} mục đã sao chép từ {}", count, label);
+        Line::from(vec![
+            Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
+            Span::styled(msg, Style::default().fg(Color::Cyan)),
+        ])
+    } else if let Some(ref item) = state.clipboard {
         let src_display = if item.remote.is_empty() {
             let local_prefix = crate::lang::translate("srv_local_system");
             if item.path == "/" || item.path.is_empty() {
@@ -302,14 +348,13 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
     frame.render_widget(console_paragraph, main_chunks[1]);
 
     // Help Bar
-    let help_text = crate::lang::translate("exp_help");
-    let help_paragraph = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+    let help_paragraph = Paragraph::new(super::parse_help_line(&help_text))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
-        );
+        )
+        .wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(help_paragraph, main_chunks[2]);
 
     // Vẽ Popups
@@ -317,14 +362,14 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
         ExplorerPopup::InputNewFolder { input_buffer } => {
             draw_input_new_folder(frame, input_buffer);
         }
-        ExplorerPopup::CopyProgress { src, dest, pct } => {
+        ExplorerPopup::CopyProgress { src, dest, pct, .. } => {
             let msg = crate::lang::translate("exp_copy_msg")
                 .replacen("{}", src, 1)
                 .replacen("{}", dest, 1)
                 .replace("{:.1}", &format!("{:.1}", pct));
             super::draw_popup(frame, &crate::lang::translate("exp_copy_title"), &msg, 60, 35);
         }
-        ExplorerPopup::MoveProgress { src, dest, pct } => {
+        ExplorerPopup::MoveProgress { src, dest, pct, .. } => {
             let msg = crate::lang::translate("exp_move_msg")
                 .replacen("{}", src, 1)
                 .replacen("{}", dest, 1)
@@ -422,7 +467,11 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
         pane.remote.clone()
     };
 
-    let title = format!(" {} : {} ", fs_label, pane.path);
+    let title = if pane.selected_names.is_empty() {
+        format!(" {} : {} ", fs_label, pane.path)
+    } else {
+        format!(" {} : {} (Đã chọn: {}) ", fs_label, pane.path, pane.selected_names.len())
+    };
 
     let block = Block::default()
         .title(Span::styled(
@@ -477,6 +526,17 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
             .skip(pane.scroll_offset)
             .take(height)
             .map(|(i, item)| {
+                let is_selected_item = pane.selected_names.contains(&item.name);
+                let is_anchor = pane.shift_anchor == Some(i) || pane.alt_anchor == Some(i);
+
+                let select_prefix = if item.name == ".." {
+                    "  "
+                } else if is_selected_item {
+                    "✔ "
+                } else {
+                    "  "
+                };
+
                 let prefix = if item.name == ".." {
                     "📁 "
                 } else if item.is_dir {
@@ -486,7 +546,7 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
                 };
 
                 // Cắt bớt / đệm khoảng trắng tên tệp dựa trên name_width động
-                let raw_name = format!("{}{}", prefix, item.name);
+                let raw_name = format!("{}{}{}", select_prefix, prefix, item.name);
                 let display_name = if raw_name.chars().count() > name_width {
                     if name_width > 3 {
                         raw_name.chars().take(name_width - 3).collect::<String>() + "..."
@@ -498,22 +558,29 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
                     raw_name + &" ".repeat(pad)
                 };
 
-                let name_span = Span::styled(
-                    display_name,
-                    if item.is_dir {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
+                let mut style = if i == pane.selected_idx && is_active {
+                    if is_selected_item {
+                        Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default()
-                    },
-                );
-
-                let style = if i == pane.selected_idx && is_active {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    }
+                } else if is_selected_item {
+                    Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)
+                } else if item.is_dir {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
+
+                if is_anchor {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                    if i != pane.selected_idx || !is_active {
+                        style = style.fg(Color::LightMagenta);
+                    }
+                }
+
+                // Sử dụng style thống nhất cho cả name_span để tránh xung đột màu
+                let name_span = Span::styled(display_name, style);
 
                 let mut spans = vec![name_span];
 
@@ -534,12 +601,26 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
                     spans.push(Span::raw("  "));
                     spans.push(Span::styled(
                         size_formatted,
-                        Style::default().fg(Color::Magenta),
+                        if i == pane.selected_idx && is_active {
+                            style // Dùng cùng style với name khi đang được trỏ
+                        } else {
+                            Style::default().fg(Color::Magenta)
+                        },
                     ));
                 }
 
+                let item_style = if i == pane.selected_idx && is_active {
+                    if is_selected_item {
+                        Style::default().bg(Color::LightGreen)
+                    } else {
+                        Style::default().bg(Color::Cyan)
+                    }
+                } else {
+                    Style::default()
+                };
+
                 let line = Line::from(spans);
-                ListItem::new(line).style(style)
+                ListItem::new(line).style(item_style)
             })
             .collect()
     };

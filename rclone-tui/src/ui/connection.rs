@@ -170,8 +170,7 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect) {
             crate::lang::translate("help_general")
         }
     };
-    let help_paragraph = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+    let help_paragraph = Paragraph::new(super::parse_help_line(&help_text))
         .block(
             Block::default()
                 .borders(Borders::ALL)

@@ -128,8 +128,7 @@ pub fn draw(state: &ProfileState, frame: &mut Frame, area: Rect, active_profile:
     } else {
         crate::lang::translate("prof_help_wizard")
     };
-    let help_paragraph = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+    let help_paragraph = Paragraph::new(super::parse_help_line(&help_text))
         .block(
             Block::default()
                 .borders(Borders::ALL)

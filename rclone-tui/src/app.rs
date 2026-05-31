@@ -23,6 +23,21 @@ use std::time::Duration;
 
 lazy_static::lazy_static! {
     static ref RUNNING_SIZE_CHECKS: std::sync::Mutex<std::collections::HashSet<String>> = std::sync::Mutex::new(std::collections::HashSet::new());
+    static ref JOB_DESCRIPTIONS: std::sync::Mutex<std::collections::HashMap<i64, String>> = std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+pub fn register_job_description(job_id: i64, description: String) {
+    if let Ok(mut map) = JOB_DESCRIPTIONS.lock() {
+        map.insert(job_id, description);
+    }
+}
+
+pub fn get_job_description(job_id: i64) -> Option<String> {
+    if let Ok(map) = JOB_DESCRIPTIONS.lock() {
+        map.get(&job_id).cloned()
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,11 +67,13 @@ pub enum AppEvent {
         src: String,
         dest: String,
         pct: f64,
+        job_id: Option<i64>,
     },
     MoveProgress {
         src: String,
         dest: String,
         pct: f64,
+        job_id: Option<i64>,
     },
     JobStatsUpdate {
         speed: f64,
@@ -104,6 +121,7 @@ pub enum AppEvent {
 pub enum DeleteTarget {
     Connection(String),
     FileExplorer(String),
+    FileExplorerMultiple(Vec<String>),
     Service(usize),
     SystemdService(usize),
 }
@@ -130,6 +148,9 @@ pub struct App {
     pub status_trigger_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     pub remote_dependencies: std::collections::HashMap<String, String>,
     pub features_cache: std::collections::HashMap<String, serde_json::Value>,
+    pub last_services_scan: std::time::Instant,
+    pub last_stats_scan: std::time::Instant,
+    pub stats_scan_in_progress: bool,
 }
 
 impl App {
@@ -168,6 +189,9 @@ impl App {
             status_trigger_tx: None,
             remote_dependencies: std::collections::HashMap::new(),
             features_cache,
+            last_services_scan: std::time::Instant::now(),
+            last_stats_scan: std::time::Instant::now(),
+            stats_scan_in_progress: false,
         }
     }
 
@@ -197,6 +221,35 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
     None
 }
 
+    fn detect_systemd_service(pid: u32) -> Option<(String, bool)> {
+        #[cfg(unix)]
+        {
+            if let Ok(content) = std::fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
+                for line in content.lines() {
+                    let parts: Vec<&str> = line.split(':').collect();
+                    if parts.len() >= 3 {
+                        let cgroup_path = parts[2];
+                        if cgroup_path.contains(".service") {
+                            let segments: Vec<&str> = cgroup_path.split('/').collect();
+                            let mut service_unit = None;
+                            for seg in segments.iter().rev() {
+                                if seg.ends_with(".service") && !seg.starts_with("user@") && !seg.starts_with("user-") && *seg != "init.service" {
+                                    service_unit = Some(seg.to_string());
+                                    break;
+                                }
+                            }
+                            if let Some(unit) = service_unit {
+                                let is_user = cgroup_path.contains("/user.slice/") || cgroup_path.contains("user@");
+                                return Some((unit, is_user));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn parse_rclone_args(&self, pid: u32, args: &[String]) -> Option<ui::services::ActiveService> {
         if args.is_empty() {
             return None;
@@ -210,6 +263,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
         if !is_rclone {
             return None;
         }
+
+        let systemd_info = Self::detect_systemd_service(pid);
 
         if args.contains(&"mount".to_string()) || args.contains(&"nfsmount".to_string()) {
             let is_nfs = args.contains(&"nfsmount".to_string());
@@ -268,12 +323,20 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 format!("{}{}{} -> {}", profile_prefix, if display_remote.ends_with(':') || display_remote.contains("->") { "" } else { "" }, display_remote, local_mnt)
             };
             let details = if is_nfs { format!("NfsMount: {}", details) } else { details };
+
+            let (service_type_str, final_details) = if let Some((unit_name, is_user)) = &systemd_info {
+                let lvl = if *is_user { "Cá nhân" } else { "Hệ thống" };
+                (format!("Service ({})", lvl), format!("Dịch vụ: {} | {}", unit_name, details))
+            } else {
+                ("Mount (Tạm thời)".to_string(), details)
+            };
+
             Some(ui::services::ActiveService {
-                service_type_str: if is_nfs { "NfsMount".to_string() } else { "Mount".to_string() },
+                service_type_str,
                 remote,
-                path: local_mnt.clone(),
+                path: local_mnt,
                 pid,
-                details,
+                details: final_details,
             })
         } else if args.contains(&"serve".to_string()) {
             let mut proto = "http".to_string();
@@ -335,12 +398,20 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 };
                 format!("{}{}{} -> {}://{}", profile_prefix, display_remote, if display_remote.is_empty() { "" } else { " -> " }, proto, addr)
             };
+
+            let (service_type_str, final_details) = if let Some((unit_name, is_user)) = &systemd_info {
+                let lvl = if *is_user { "Cá nhân" } else { "Hệ thống" };
+                (format!("Service ({})", lvl), format!("Dịch vụ: {} | {}", unit_name, details))
+            } else {
+                ("Serve (Tạm thời)".to_string(), details)
+            };
+
             Some(ui::services::ActiveService {
-                service_type_str: "Serve".to_string(),
+                service_type_str,
                 remote: remote_path,
-                path: addr.clone(),
+                path: addr,
                 pid,
-                details,
+                details: final_details,
             })
         } else if args.contains(&"rcd".to_string()) {
             let mut rc_addr = "localhost:5572".to_string();
@@ -380,15 +451,37 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             } else {
                 format!("{}: -> ", profile_name)
             };
+            let details = format!("{}Cổng Web: {}", profile_prefix, rc_addr);
+
+            let (service_type_str, final_details) = if let Some((unit_name, is_user)) = &systemd_info {
+                let lvl = if *is_user { "Cá nhân" } else { "Hệ thống" };
+                (format!("Service ({})", lvl), format!("Dịch vụ: {} | {}", unit_name, details))
+            } else {
+                ("WebGui (Tạm thời)".to_string(), details)
+            };
+
             Some(ui::services::ActiveService {
-                service_type_str: "WebGui".to_string(),
+                service_type_str,
                 remote: String::new(),
-                path: rc_addr.clone(),
+                path: rc_addr,
                 pid,
-                details: format!("{}Cổng Web: {}", profile_prefix, rc_addr),
+                details: final_details,
             })
         } else {
-            None
+            if let Some((unit_name, is_user)) = systemd_info {
+                let lvl = if is_user { "Cá nhân" } else { "Hệ thống" };
+                let service_type_str = format!("Service ({})", lvl);
+                let details = format!("Dịch vụ: {} | Lệnh: {}", unit_name, args.join(" "));
+                Some(ui::services::ActiveService {
+                    service_type_str,
+                    remote: String::new(),
+                    path: String::new(),
+                    pid,
+                    details,
+                })
+            } else {
+                None
+            }
         }
     }
 
@@ -1554,9 +1647,20 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
         pane.loading = false;
         match result {
             Ok(items) => {
+                let new_len = items.len();
                 pane.items = items;
-                pane.selected_idx = 0;
-                pane.scroll_offset = 0; // Reset scroll (Bug 97)
+                // Clamp chỉ mục chọn theo độ dài thực tế của danh sách mới
+                if new_len == 0 {
+                    pane.selected_idx = 0;
+                    pane.scroll_offset = 0;
+                } else {
+                    if pane.selected_idx >= new_len {
+                        pane.selected_idx = new_len - 1;
+                    }
+                    if pane.scroll_offset >= new_len {
+                        pane.scroll_offset = new_len.saturating_sub(1);
+                    }
+                }
                 self.explorer_state.error_message = None;
             }
             Err(e) => {
@@ -1749,19 +1853,25 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
-                    let param = json!({
-                        "srcFs": src,
-                        "dstFs": dest,
-                    })
-                    .to_string();
-                    let _ = rclone::rpc_async("sync/move".to_string(), param).await;
-                    let _ = tx_move.send(AppEvent::MoveProgress {
-                        src,
-                        dest,
-                        pct: 100.0,
+                    let res = run_rpc_job_async_with_progress(
+                        "sync/move".to_string(),
+                        json!({
+                            "srcFs": src_clone,
+                            "dstFs": dest_clone,
+                        }),
+                        Some((src_clone, dest_clone, false)),
+                        Some(tx_move.clone()),
+                    ).await;
+                    let _ = tx_move.send(AppEvent::ExplorerOperationFinished {
+                        pane: ui::explorer::ActivePane::Left,
+                        op_name: "di chuyển (move)".to_string(),
+                        result: res,
                     });
                 });
             } else {
@@ -1799,6 +1909,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
                 let is_dir_spawn = is_dir;
@@ -1876,13 +1987,21 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_copy = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
-                    let res = run_rpc_job_async("sync/copy".to_string(), json!({
-                        "srcFs": src,
-                        "dstFs": dest,
-                    })).await;
+                    let res = run_rpc_job_async_with_progress(
+                        "sync/copy".to_string(),
+                        json!({
+                            "srcFs": src_clone,
+                            "dstFs": dest_clone,
+                        }),
+                        Some((src_clone, dest_clone, true)),
+                        Some(tx_copy.clone()),
+                    ).await;
                     let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                         pane: ui::explorer::ActivePane::Left,
                         op_name: "sao chép (copy)".to_string(),
@@ -1924,13 +2043,21 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
-                    let res = run_rpc_job_async("sync/move".to_string(), json!({
-                        "srcFs": src,
-                        "dstFs": dest,
-                    })).await;
+                    let res = run_rpc_job_async_with_progress(
+                        "sync/move".to_string(),
+                        json!({
+                            "srcFs": src_clone,
+                            "dstFs": dest_clone,
+                        }),
+                        Some((src_clone, dest_clone, false)),
+                        Some(tx_move.clone()),
+                    ).await;
                     let _ = tx_move.send(AppEvent::ExplorerOperationFinished {
                         pane: ui::explorer::ActivePane::Left,
                         op_name: "di chuyển (move)".to_string(),
@@ -1943,20 +2070,28 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
                     let mkdir_res = run_rpc_job_async("operations/mkdir".to_string(), json!({
-                        "fs": dest,
+                        "fs": dest_clone,
                         "remote": "",
                     })).await;
                     let copy_res = if mkdir_res.is_err() {
                         mkdir_res
                     } else {
-                        run_rpc_job_async("sync/copy".to_string(), json!({
-                            "srcFs": src,
-                            "dstFs": dest,
-                        })).await
+                        run_rpc_job_async_with_progress(
+                            "sync/copy".to_string(),
+                            json!({
+                                "srcFs": src_clone,
+                                "dstFs": dest_clone,
+                            }),
+                            Some((src_clone, dest_clone, true)),
+                            Some(tx_move.clone()),
+                        ).await
                     };
                     match copy_res {
                         Ok(_) => {
@@ -1990,13 +2125,21 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_copy = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
-                    let res = run_rpc_job_async("sync/copy".to_string(), json!({
-                        "srcFs": src,
-                        "dstFs": dest,
-                    })).await;
+                    let res = run_rpc_job_async_with_progress(
+                        "sync/copy".to_string(),
+                        json!({
+                            "srcFs": src_clone,
+                            "dstFs": dest_clone,
+                        }),
+                        Some((src_clone, dest_clone, true)),
+                        Some(tx_copy.clone()),
+                    ).await;
                     let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                         pane: ui::explorer::ActivePane::Left,
                         op_name: "sao chép (copy)".to_string(),
@@ -2045,8 +2188,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
                     let parse_path = |fs: &str| -> (String, String) {
                         let (remote_part, path_part) = if let Some(idx) = fs.find(':') {
@@ -2065,20 +2211,25 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
 
                     let copy_res = if is_dir {
                         let mkdir_res = run_rpc_job_async("operations/mkdir".to_string(), json!({
-                            "fs": dest,
+                            "fs": dest_clone,
                             "remote": "",
                         })).await;
                         if mkdir_res.is_err() {
                             mkdir_res
                         } else {
-                            run_rpc_job_async("sync/copy".to_string(), json!({
-                                "srcFs": src,
-                                "dstFs": dest,
-                            })).await
+                            run_rpc_job_async_with_progress(
+                                "sync/copy".to_string(),
+                                json!({
+                                    "srcFs": src_clone,
+                                    "dstFs": dest_clone,
+                                }),
+                                Some((src_clone.clone(), dest_clone.clone(), true)),
+                                Some(tx_move.clone()),
+                            ).await
                         }
                     } else {
-                        let (src_fs, src_file) = parse_path(&src);
-                        let (dst_fs, dst_file) = parse_path(&dest);
+                        let (src_fs, src_file) = parse_path(&src_clone);
+                        let (dst_fs, dst_file) = parse_path(&dest_clone);
                         run_rpc_job_async("operations/copyfile".to_string(), json!({
                             "srcFs": src_fs,
                             "srcRemote": src_file,
@@ -2090,9 +2241,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     match copy_res {
                         Ok(_) => {
                             let del_res = if is_dir {
-                                run_rpc_job_async("operations/purge".to_string(), json!({ "fs": src, "remote": "" })).await
+                                run_rpc_job_async("operations/purge".to_string(), json!({ "fs": src_clone, "remote": "" })).await
                             } else {
-                                let (src_fs, src_file) = parse_path(&src);
+                                let (src_fs, src_file) = parse_path(&src_clone);
                                 run_rpc_job_async("operations/deletefile".to_string(), json!({ "fs": src_fs, "remote": src_file })).await
                             };
 
@@ -2117,8 +2268,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     src: src.clone(),
                     dest: dest.clone(),
                     pct: 0.0,
+                    job_id: None,
                 };
                 let tx_move = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
                 tokio::spawn(async move {
                     let parse_path = |fs: &str| -> (String, String) {
                         let (remote_part, path_part) = if let Some(idx) = fs.find(':') {
@@ -2137,28 +2291,33 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
 
                     let res = if is_dir {
                         let mkdir_res = run_rpc_job_async("operations/mkdir".to_string(), json!({
-                            "fs": dest,
+                            "fs": dest_clone,
                             "remote": "",
                         })).await;
                         if mkdir_res.is_err() {
                             mkdir_res
                         } else {
-                            let move_res = run_rpc_job_async("sync/move".to_string(), json!({
-                                "srcFs": src,
-                                "dstFs": dest,
-                            })).await;
+                            let move_res = run_rpc_job_async_with_progress(
+                                "sync/move".to_string(),
+                                json!({
+                                    "srcFs": src_clone,
+                                    "dstFs": dest_clone,
+                                }),
+                                Some((src_clone.clone(), dest_clone.clone(), false)),
+                                Some(tx_move.clone()),
+                            ).await;
                             if move_res.is_err() {
                                 move_res
                             } else {
                                 run_rpc_job_async("operations/purge".to_string(), json!({
-                                    "fs": src,
+                                    "fs": src_clone,
                                     "remote": "",
                                 })).await
                             }
                         }
                     } else {
-                        let (src_fs, src_file) = parse_path(&src);
-                        let (dst_fs, dst_file) = parse_path(&dest);
+                        let (src_fs, src_file) = parse_path(&src_clone);
+                        let (dst_fs, dst_file) = parse_path(&dest_clone);
                         run_rpc_job_async("operations/movefile".to_string(), json!({
                             "srcFs": src_fs,
                             "srcRemote": src_file,
@@ -2632,6 +2791,10 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             crate::lang::translate("confirm_delete_file_title"),
                             crate::lang::translate("confirm_delete_file").replace("{}", name),
                         ),
+                        DeleteTarget::FileExplorerMultiple(names) => (
+                            crate::lang::translate("confirm_delete_multiple_title"),
+                            crate::lang::translate("confirm_delete_multiple").replace("{}", &names.len().to_string()),
+                        ),
                         DeleteTarget::Service(idx) => {
                             let service_details = if *idx < self.services_state.active_services.len() {
                                 &self.services_state.active_services[*idx].details
@@ -2702,7 +2865,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     AppEvent::WizardGuiRefresh => {
                         self.refresh_wizard_gui_list(tx.clone()).await;
                     }
-                    AppEvent::CopyProgress { src, dest, pct } => {
+                    AppEvent::CopyProgress { src, dest, pct, job_id } => {
                         if let ui::explorer::ExplorerPopup::CopyProgress { .. } =
                             self.explorer_state.popup
                         {
@@ -2720,11 +2883,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 .await;
                             } else {
                                 self.explorer_state.popup =
-                                    ui::explorer::ExplorerPopup::CopyProgress { src, dest, pct };
+                                    ui::explorer::ExplorerPopup::CopyProgress { src, dest, pct, job_id };
                             }
                         }
                     }
-                    AppEvent::MoveProgress { src, dest, pct } => {
+                    AppEvent::MoveProgress { src, dest, pct, job_id } => {
                         if let ui::explorer::ExplorerPopup::MoveProgress { .. } =
                             self.explorer_state.popup
                         {
@@ -2742,7 +2905,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 .await;
                             } else {
                                 self.explorer_state.popup =
-                                    ui::explorer::ExplorerPopup::MoveProgress { src, dest, pct };
+                                    ui::explorer::ExplorerPopup::MoveProgress { src, dest, pct, job_id };
                             }
                         }
                     }
@@ -2756,6 +2919,10 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         self.monitor_state.bytes_transferred = transferred;
                         self.monitor_state.total_bytes = total;
                         self.monitor_state.active_jobs = active;
+                        if self.monitor_state.selected_job_idx >= self.monitor_state.active_jobs.len() {
+                            self.monitor_state.selected_job_idx = 0;
+                        }
+                        self.stats_scan_in_progress = false;
                     }
                     AppEvent::OAuthFinished { result } => {
                         if let ui::connection::WizardState::SimpleOAuthLoop {
@@ -2800,7 +2967,13 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         }
                     }
                     AppEvent::ExplorerOperationFinished { pane: _, op_name, result } => {
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                        if matches!(
+                            self.explorer_state.popup,
+                            ui::explorer::ExplorerPopup::CopyProgress { .. }
+                                | ui::explorer::ExplorerPopup::MoveProgress { .. }
+                        ) {
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                        }
                         match result {
                             Ok(_) => {
                                 self.refresh_explorer_pane(ui::explorer::ActivePane::Left, tx.clone()).await;
@@ -2905,62 +3078,89 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
     /// Định kỳ cập nhật thông tin Stats và trạng thái các Service chạy ngầm
     async fn handle_tick_event(&mut self, tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
         if self.screen == Screen::ServicesAndMounts {
-            self.scan_running_services();
-            self.scan_systemd_services();
+            // Throttle: chỉ quét tối đa mỗi 4 giây
+            if self.last_services_scan.elapsed() >= std::time::Duration::from_secs(4) {
+                self.scan_running_services();
+                self.scan_systemd_services();
+                self.last_services_scan = std::time::Instant::now();
+            }
         }
         if self.screen == Screen::JobMonitor {
-            // Lấy Stats từ core Rclone RPC
-            let res = rclone::rpc_async("core/stats".to_string(), "{}".to_string()).await;
-            
-            // Lấy danh sách Job ID
-            let list_res = rclone::rpc_async("job/list".to_string(), "{}".to_string()).await;
-            
-            let mut active = Vec::new();
-            let mut speed = 0.0;
-            let mut transferred = 0;
-            let mut total = 0;
+            if self.stats_scan_in_progress {
+                return;
+            }
+            // Throttle: chỉ cập nhật stats tối đa mỗi 1.5 giây
+            if self.last_stats_scan.elapsed() < std::time::Duration::from_millis(1500) {
+                return;
+            }
+            self.last_stats_scan = std::time::Instant::now();
+            self.stats_scan_in_progress = true;
 
-            if let Ok(rpc_res) = res {
-                if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
-                    speed = val.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                    transferred = val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-                    total = val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                // Lấy Stats từ core Rclone RPC
+                let res = rclone::rpc_async("core/stats".to_string(), "{}".to_string()).await;
+                
+                // Lấy danh sách Job ID
+                let list_res = rclone::rpc_async("job/list".to_string(), "{}".to_string()).await;
+                
+                let mut active = Vec::new();
+                let mut speed = 0.0;
+                let mut transferred = 0;
+                let mut total = 0;
 
-                    if let Some(transfers) = val.get("transferring").and_then(|t| t.as_array()) {
-                        for t_val in transfers {
-                            let name = t_val
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
-                            let bytes = t_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-                            let speed = t_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
-                            let percentage = t_val
-                                .get("percentage")
-                                .and_then(|p| p.as_u64())
-                                .unwrap_or(0) as u16;
-                            let eta = t_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
+                if let Ok(rpc_res) = res {
+                    if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
+                        speed = val.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                        transferred = val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                        total = val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
 
-                            active.push(ui::monitor::TransferJob {
-                                name,
-                                size,
-                                bytes,
-                                speed,
-                                percentage,
-                                eta,
-                                job_id: None,
-                            });
+                        if let Some(transfers) = val.get("transferring").and_then(|t| t.as_array()) {
+                            for t_val in transfers {
+                                let name = t_val
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                let bytes = t_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                let speed_t = t_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
+                                let percentage = t_val
+                                    .get("percentage")
+                                    .and_then(|p| p.as_u64())
+                                    .unwrap_or(0) as u16;
+                                let eta = t_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
+
+                                active.push(ui::monitor::TransferJob {
+                                    name,
+                                    size,
+                                    bytes,
+                                    speed: speed_t,
+                                    percentage,
+                                    eta,
+                                    job_id: None,
+                                    start_time: String::new(),
+                                    duration: 0.0,
+                                    group: String::new(),
+                                    description: String::new(),
+                                });
+                            }
                         }
                     }
                 }
-            }
 
-            // Thêm các background jobs vào danh sách active
-            if let Ok(list_rpc) = list_res {
-                if let Ok(list_val) = serde_json::from_str::<Value>(&list_rpc.output) {
-                    if let Some(job_ids) = list_val.get("jobids").and_then(|j| j.as_array()) {
-                        for id_val in job_ids {
+                // Thêm các background jobs vào danh sách active (chỉ duyệt qua các job đang thực sự chạy)
+                if let Ok(list_rpc) = list_res {
+                    if let Ok(list_val) = serde_json::from_str::<Value>(&list_rpc.output) {
+                        let ids_to_check = if let Some(r_ids) = list_val.get("runningIds").and_then(|j| j.as_array()) {
+                            r_ids.clone()
+                        } else if let Some(job_ids) = list_val.get("jobids").and_then(|j| j.as_array()) {
+                            job_ids.clone()
+                        } else {
+                            Vec::new()
+                        };
+
+                        for id_val in ids_to_check {
                             if let Some(id) = id_val.as_i64() {
                                 // Lấy thông tin chi tiết từng Job
                                 let status_res = rclone::rpc_async(
@@ -2970,32 +3170,98 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 .await;
                                 if let Ok(sr) = status_res {
                                     if let Ok(sval) = serde_json::from_str::<Value>(&sr.output) {
-                                        let desc = sval.get("description").and_then(|d| d.as_str()).unwrap_or("Tác vụ nền");
-                                        let duration = sval.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
-                                        
-                                        // Thêm vào danh sách active
-                                        active.push(ui::monitor::TransferJob {
-                                            name: format!("[Job {}] {} (Chạy {:.1}s)", id, desc, duration),
-                                            size: 0,
-                                            bytes: 0,
-                                            speed: 0,
-                                            percentage: 0,
-                                            eta: -1,
-                                            job_id: Some(id),
-                                        });
+                                        let finished = sval.get("finished").and_then(|f| f.as_bool()).unwrap_or(false);
+                                        if !finished {
+                                            let desc_opt = get_job_description(id);
+                                            let desc = desc_opt.as_deref().unwrap_or_else(|| {
+                                                sval.get("description").and_then(|d| d.as_str()).unwrap_or("Tác vụ nền")
+                                            });
+                                            let duration = sval.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+                                            
+                                            // Lấy stats cho group tương ứng "job/<id>"
+                                            let mut speed_job = 0;
+                                            let mut bytes_job = 0;
+                                            let mut size_job = 0;
+                                            let mut pct_job = 0;
+                                            let mut eta_job = -1;
+
+                                            let group_stats_res = rclone::rpc_async(
+                                                "core/stats".to_string(),
+                                                json!({ "group": format!("job/{}", id) }).to_string(),
+                                            )
+                                            .await;
+                                            if let Ok(st_res) = group_stats_res {
+                                                if let Ok(st_val) = serde_json::from_str::<Value>(&st_res.output) {
+                                                    speed_job = st_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
+                                                    bytes_job = st_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                                    size_job = st_val.get("totalBytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                                    
+                                                    // Cộng vào global stats để hiển thị tổng quan đúng
+                                                    speed += speed_job as f64;
+                                                    transferred += bytes_job;
+                                                    total += size_job;
+
+                                                    if size_job > 0 {
+                                                        pct_job = ((bytes_job as f64 / size_job as f64) * 100.0) as u16;
+                                                    }
+                                                    eta_job = st_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
+
+                                                    // Thêm các file đang truyền của job này vào danh sách active
+                                                    if let Some(transfers) = st_val.get("transferring").and_then(|t| t.as_array()) {
+                                                        for t_val in transfers {
+                                                            let name = t_val.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                                                            let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                                            let bytes = t_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                                            let speed_t = t_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
+                                                            let percentage = t_val.get("percentage").and_then(|p| p.as_u64()).unwrap_or(0) as u16;
+                                                            let eta = t_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
+
+                                                            active.push(ui::monitor::TransferJob {
+                                                                name: format!("[Job {}] {}", id, name),
+                                                                size,
+                                                                bytes,
+                                                                speed: speed_t,
+                                                                percentage,
+                                                                eta,
+                                                                job_id: None,
+                                                                start_time: String::new(),
+                                                                duration: 0.0,
+                                                                group: String::new(),
+                                                                description: String::new(),
+                                                            });
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Thêm vào danh sách active
+                                            active.push(ui::monitor::TransferJob {
+                                                name: format!("[Job {}] {} (Chạy {:.1}s)", id, desc, duration),
+                                                size: size_job,
+                                                bytes: bytes_job,
+                                                speed: speed_job,
+                                                percentage: pct_job,
+                                                eta: eta_job,
+                                                job_id: Some(id),
+                                                start_time: sval.get("startTime").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                                                duration,
+                                                group: sval.get("group").and_then(|g| g.as_str()).unwrap_or("").to_string(),
+                                                description: desc.to_string(),
+                                            });
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            let _ = tx.send(AppEvent::JobStatsUpdate {
-                speed,
-                transferred,
-                total,
-                active,
+                let _ = tx_clone.send(AppEvent::JobStatsUpdate {
+                    speed,
+                    transferred,
+                    total,
+                    active,
+                });
             });
         }
     }
@@ -3062,35 +3328,66 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         }
                         DeleteTarget::FileExplorer(item_name) => {
                             let pane = self.explorer_state.get_active_pane();
-                            let target = if pane.remote.is_empty() {
-                                std::path::PathBuf::from(&pane.path)
-                                    .join(&item_name)
-                                    .to_string_lossy()
-                                    .to_string()
-                            } else {
-                                let clean_remote = pane.remote.trim_end_matches(':');
-                                let clean_path = if pane.path.starts_with('/') {
-                                    pane.path.clone()
-                                } else {
-                                    format!("/{}", pane.path)
-                                };
-                                if clean_path.ends_with('/') {
-                                    format!("{}:{}{}", clean_remote, clean_path, item_name)
-                                } else {
-                                    format!("{}:{}/{}", clean_remote, clean_path, item_name)
-                                }
-                            };
+                            let is_dir = pane.items.iter()
+                                .find(|item| item.name == item_name)
+                                .map(|item| item.is_dir)
+                                .unwrap_or(false);
 
-                            let param = serde_json::json!({
-                                "fs": target,
-                                "remote": "",
-                            })
-                            .to_string();
-
-                            let tx_op = tx.clone();
+                            let remote = pane.remote.clone();
+                            let pane_path = pane.path.clone();
                             let pane_type = self.explorer_state.active_pane.clone();
+                            let tx_op = tx.clone();
+
                             tokio::spawn(async move {
-                                let op_res = rclone::rpc_async("operations/purge".to_string(), param).await;
+                                let (op_name, method, param) = if is_dir {
+                                    let target = if remote.is_empty() {
+                                        std::path::PathBuf::from(&pane_path)
+                                            .join(&item_name)
+                                            .to_string_lossy()
+                                            .to_string()
+                                    } else {
+                                        let clean_remote = remote.trim_end_matches(':');
+                                        let clean_path = if pane_path.starts_with('/') {
+                                            pane_path.clone()
+                                        } else {
+                                            format!("/{}", pane_path)
+                                        };
+                                        if clean_path.ends_with('/') {
+                                            format!("{}:{}{}", clean_remote, clean_path, item_name)
+                                        } else {
+                                            format!("{}:{}/{}", clean_remote, clean_path, item_name)
+                                        }
+                                    };
+                                    (
+                                        "xóa thư mục (purge)".to_string(),
+                                        "operations/purge".to_string(),
+                                        serde_json::json!({
+                                            "fs": target,
+                                            "remote": "",
+                                        })
+                                    )
+                                } else {
+                                    let fs = if remote.is_empty() {
+                                        pane_path
+                                    } else {
+                                        let clean_remote = remote.trim_end_matches(':');
+                                        if pane_path.is_empty() {
+                                            format!("{}:", clean_remote)
+                                        } else {
+                                            format!("{}:{}", clean_remote, pane_path)
+                                        }
+                                    };
+                                    (
+                                        "xóa tệp (deletefile)".to_string(),
+                                        "operations/deletefile".to_string(),
+                                        serde_json::json!({
+                                            "fs": fs,
+                                            "remote": item_name,
+                                        })
+                                    )
+                                };
+
+                                let op_res = rclone::rpc_async(method, param.to_string()).await;
                                 let res = match op_res {
                                     Ok(r) if r.status == 200 => Ok(()),
                                     Ok(r) => Err(format!("Mã lỗi: {}", r.status)),
@@ -3098,7 +3395,98 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 };
                                 let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
                                     pane: pane_type,
-                                    op_name: "xóa (purge)".to_string(),
+                                    op_name,
+                                    result: res,
+                                });
+                            });
+                        }
+                        DeleteTarget::FileExplorerMultiple(item_names) => {
+                            let pane_type = self.explorer_state.active_pane.clone();
+                            let pane = self.explorer_state.get_active_pane_mut();
+                            pane.selected_names.clear();
+                            pane.shift_anchor = None;
+                            pane.shift_active = false;
+                            pane.alt_anchor = None;
+                            pane.alt_active = false;
+                            let remote = pane.remote.clone();
+                            let pane_path = pane.path.clone();
+                            let tx_op = tx.clone();
+                            
+                            let items_with_type: Vec<(String, bool)> = item_names
+                                .into_iter()
+                                .map(|name| {
+                                    let is_dir = pane.items.iter()
+                                        .find(|item| item.name == name)
+                                        .map(|item| item.is_dir)
+                                        .unwrap_or(false);
+                                    (name, is_dir)
+                                })
+                                .collect();
+
+                            tokio::spawn(async move {
+                                let mut last_err = None;
+                                for (item_name, is_dir) in items_with_type {
+                                    let (method, param) = if is_dir {
+                                        let target = if remote.is_empty() {
+                                            std::path::PathBuf::from(&pane_path)
+                                                .join(&item_name)
+                                                .to_string_lossy()
+                                                .to_string()
+                                        } else {
+                                            let clean_remote = remote.trim_end_matches(':');
+                                            let clean_path = if pane_path.starts_with('/') {
+                                                pane_path.clone()
+                                            } else {
+                                                format!("/{}", pane_path)
+                                            };
+                                            if clean_path.ends_with('/') {
+                                                format!("{}:{}{}", clean_remote, clean_path, item_name)
+                                            } else {
+                                                format!("{}:{}/{}", clean_remote, clean_path, item_name)
+                                            }
+                                        };
+                                        (
+                                            "operations/purge".to_string(),
+                                            serde_json::json!({
+                                                "fs": target,
+                                                "remote": "",
+                                            })
+                                        )
+                                    } else {
+                                        let fs = if remote.is_empty() {
+                                            pane_path.clone()
+                                        } else {
+                                            let clean_remote = remote.trim_end_matches(':');
+                                            if pane_path.is_empty() {
+                                                format!("{}:", clean_remote)
+                                            } else {
+                                                format!("{}:{}", clean_remote, pane_path)
+                                            }
+                                        };
+                                        (
+                                            "operations/deletefile".to_string(),
+                                            serde_json::json!({
+                                                "fs": fs,
+                                                "remote": item_name,
+                                            })
+                                        )
+                                    };
+
+                                    let op_res = rclone::rpc_async(method, param.to_string()).await;
+                                    match op_res {
+                                        Ok(r) if r.status == 200 => {}
+                                        Ok(r) => last_err = Some(format!("Mã lỗi: {}", r.status)),
+                                        Err(e) => last_err = Some(e),
+                                    }
+                                }
+                                
+                                let res = match last_err {
+                                    None => Ok(()),
+                                    Some(e) => Err(e),
+                                };
+                                let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                                    pane: pane_type,
+                                    op_name: "xóa nhiều mục".to_string(),
                                     result: res,
                                 });
                             });
@@ -3247,7 +3635,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 }
                 1 => {
                     self.screen = Screen::FileExplorer;
-                    self.explorer_state = ui::explorer::ExplorerState::new();
+                    // Giữ nguyên trạng thái explorer nếu đã có dữ liệu
+                    if self.explorer_state.left_pane.items.is_empty() && self.explorer_state.right_pane.items.is_empty() {
+                        // Chỉ khởi tạo lại nếu chưa từng mở File Explorer
+                        self.explorer_state = ui::explorer::ExplorerState::new();
+                    }
                     self.load_remotes(tx.clone()).await;
                     self.refresh_explorer_pane(ui::explorer::ActivePane::Left, tx.clone())
                         .await;
@@ -3256,6 +3648,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 }
                 2 => {
                     self.screen = Screen::JobMonitor;
+                    // Kích hoạt quét tức thời khi chuyển sang màn hình Job Monitor
+                    self.last_stats_scan = std::time::Instant::now() - std::time::Duration::from_secs(10);
                 }
                 3 => {
                     self.screen = Screen::ConfigProfileManager;
@@ -3264,6 +3658,10 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 4 => {
                     self.screen = Screen::ServicesAndMounts;
                     self.load_remotes(tx.clone()).await;
+                    // Kích hoạt quét tức thời khi chuyển sang màn hình dịch vụ
+                    self.scan_running_services();
+                    self.scan_systemd_services();
+                    self.last_services_scan = std::time::Instant::now();
                 }
                 5 => {
                     self.screen = Screen::LanguageSelect;
@@ -4980,31 +5378,55 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         KeyCode::Enter => {
                             let folder_name = input_buffer.trim().to_string();
                             if !folder_name.is_empty() {
-                                let pane = self.explorer_state.get_active_pane();
-                                let target = if pane.remote.is_empty() {
+                                let pane = self.explorer_state.get_active_pane_mut();
+                                let is_local = pane.remote.is_empty();
+                                let target = if is_local {
                                     PathBuf::from(&pane.path)
                                         .join(&folder_name)
                                         .to_string_lossy()
                                         .to_string()
                                 } else {
-                                    let clean_path = pane.path.trim_start_matches('/').trim_end_matches('/');
-                                    if clean_path.is_empty() {
-                                        format!("{}:/{}", pane.remote.trim_end_matches(':'), folder_name)
-                                    } else {
-                                        format!("{}:/{}/{}", pane.remote.trim_end_matches(':'), clean_path, folder_name)
-                                    }
+                                    String::new()
                                 };
 
-                                let param = json!({
-                                    "fs": target,
-                                    "remote": "",
-                                })
+                                // Chèn thư mục mới một cách lạc quan vào danh sách UI
+                                if !pane.items.iter().any(|item| item.name == folder_name) {
+                                    pane.items.push(ui::explorer::FileItem {
+                                        name: folder_name.clone(),
+                                        size: 0,
+                                        is_dir: true,
+                                        mod_time: crate::lang::translate("exp_creating_placeholder"),
+                                    });
+                                    pane.items.sort_by(|a, b| {
+                                        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name))
+                                    });
+                                    if let Some(pos) = pane.items.iter().position(|item| item.name == folder_name) {
+                                        pane.selected_idx = pos;
+                                    }
+                                }
+
+                                let param = if is_local {
+                                    json!({
+                                        "fs": target,
+                                        "remote": "",
+                                    })
+                                } else {
+                                    let clean_path = pane.path.trim_start_matches('/').trim_end_matches('/');
+                                    let parent_fs = if clean_path.is_empty() {
+                                        format!("{}:", pane.remote.trim_end_matches(':'))
+                                    } else {
+                                        format!("{}:/{}", pane.remote.trim_end_matches(':'), clean_path)
+                                    };
+                                    json!({
+                                        "fs": parent_fs,
+                                        "remote": folder_name.clone(),
+                                    })
+                                }
                                 .to_string();
 
                                 let tx_op = tx.clone();
                                 let pane_type = self.explorer_state.active_pane.clone();
                                 tokio::spawn(async move {
-                                    let is_local = !target.contains(':') || target.starts_with('/');
                                     let res = if is_local {
                                         if std::fs::create_dir_all(&target).is_ok() {
                                             Ok(())
@@ -5069,12 +5491,14 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
 
                             // Spawn job đồng bộ bất đồng bộ
                             tokio::spawn(async move {
-                                let param = json!({
-                                    "srcFs": src_fs,
-                                    "dstFs": dest_fs,
-                                })
-                                .to_string();
-                                let _ = rclone::rpc_async("sync/sync".to_string(), param).await;
+                                let _ = run_rpc_job_async(
+                                    "sync/sync".to_string(),
+                                    json!({
+                                        "srcFs": src_fs,
+                                        "dstFs": dest_fs,
+                                    }),
+                                )
+                                .await;
                             });
                         }
                         _ => {}
@@ -5118,6 +5542,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         active_pane.items.clear();
                         active_pane.selected_idx = 0;
                         active_pane.scroll_offset = 0;
+                        active_pane.selected_names.clear();
+                        active_pane.shift_anchor = None;
+                        active_pane.shift_active = false;
+                        active_pane.alt_anchor = None;
+                        active_pane.alt_active = false;
                         self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
 
                         let p_type = self.explorer_state.active_pane.clone();
@@ -5168,11 +5597,15 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         }
                     }
                 },
-                ui::explorer::ExplorerPopup::CopyProgress { .. }
-                | ui::explorer::ExplorerPopup::MoveProgress { .. } => {
+                ui::explorer::ExplorerPopup::CopyProgress { job_id, .. }
+                | ui::explorer::ExplorerPopup::MoveProgress { job_id, .. } => {
                     if (key.code == KeyCode::Char('c') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
                         || key.code == KeyCode::Esc
                     {
+                        if let Some(id) = job_id {
+                            let param = json!({ "jobid": id }).to_string();
+                            let _ = rclone::rpc("job/stop", &param);
+                        }
                         self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                     }
                 }
@@ -5440,7 +5873,13 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     };
                                     self.refresh_tui_selector_list(tx.clone());
                                 } else if selected.is_dir {
-                                    if path.is_empty() || path == "/" {
+                                    if path == "/" {
+                                        if remote.is_empty() {
+                                            path = format!("/{}", selected.name);
+                                        } else {
+                                            path = selected.name;
+                                        }
+                                    } else if path.is_empty() {
                                         path = selected.name;
                                     } else {
                                         path = format!("{}/{}", path, selected.name);
@@ -5565,11 +6004,22 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             active_pane.items.clear();
                             active_pane.selected_idx = 0;
                             active_pane.scroll_offset = 0;
+                            active_pane.selected_names.clear();
+                            active_pane.shift_anchor = None;
+                            active_pane.shift_active = false;
+                            active_pane.alt_anchor = None;
+                            active_pane.alt_active = false;
                             let p_type = self.explorer_state.active_pane.clone();
                             self.refresh_explorer_pane(p_type, tx.clone()).await;
                         }
                     } else if selected.is_dir {
-                        if active_pane.path.is_empty() || active_pane.path == "/" {
+                        if active_pane.path == "/" {
+                            if active_pane.remote.is_empty() {
+                                active_pane.path = format!("/{}", selected.name);
+                            } else {
+                                active_pane.path = selected.name;
+                            }
+                        } else if active_pane.path.is_empty() {
                             active_pane.path = selected.name;
                         } else {
                             active_pane.path = format!("{}/{}", active_pane.path, selected.name);
@@ -5577,6 +6027,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         active_pane.items.clear();
                         active_pane.selected_idx = 0;
                         active_pane.scroll_offset = 0;
+                        active_pane.selected_names.clear();
+                        active_pane.shift_anchor = None;
+                        active_pane.shift_active = false;
+                        active_pane.alt_anchor = None;
+                        active_pane.alt_active = false;
                         let p_type = self.explorer_state.active_pane.clone();
                         self.refresh_explorer_pane(p_type, tx.clone()).await;
                     } else {
@@ -5682,11 +6137,16 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     active_pane.items.clear();
                     active_pane.selected_idx = 0;
                     active_pane.scroll_offset = 0;
+                    active_pane.selected_names.clear();
+                    active_pane.shift_anchor = None;
+                    active_pane.shift_active = false;
+                    active_pane.alt_anchor = None;
+                    active_pane.alt_active = false;
                     let p_type = self.explorer_state.active_pane.clone();
                     self.refresh_explorer_pane(p_type, tx.clone()).await;
                 }
             }
-            KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Ctrl+R: Mở danh sách remote để lựa chọn cho pane hiện tại
                 let mut remotes = vec!["[Local System]".to_string()];
                 remotes.extend(self.connection_state.remotes.clone());
@@ -5700,7 +6160,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     input_buffer: String::new(),
                 };
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('y') | KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Ctrl+Y: Đổi tên tệp/thư mục
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
@@ -5717,28 +6177,116 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             KeyCode::Delete => {
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
-                    let item_name = pane.items[pane.selected_idx].name.clone();
-                    if item_name != ".." {
-                        self.delete_confirm = Some(DeleteTarget::FileExplorer(item_name));
+                    // Nếu có nhiều mục được chọn, xóa tất cả
+                    if !pane.selected_names.is_empty() {
+                        let names: Vec<String> = pane.selected_names.iter().cloned().collect();
+                        self.delete_confirm = Some(DeleteTarget::FileExplorerMultiple(names));
+                    } else {
+                        let item_name = pane.items[pane.selected_idx].name.clone();
+                        if item_name != ".." {
+                            self.delete_confirm = Some(DeleteTarget::FileExplorer(item_name));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+A: Chọn tất cả (ngoại trừ "..")
+                let pane = self.explorer_state.get_active_pane_mut();
+                if pane.selected_names.len() == pane.items.iter().filter(|i| i.name != "..").count() {
+                    // Nếu đã chọn hết thì bỏ chọn tất cả
+                    pane.selected_names.clear();
+                } else {
+                    pane.selected_names.clear();
+                    for item in &pane.items {
+                        if item.name != ".." {
+                            pane.selected_names.insert(item.name.clone());
+                        }
+                    }
+                }
+            }
+
+            KeyCode::Char('V') | KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::SHIFT) && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                // Shift+V: Chọn theo vùng dạng bôi đen/loại bỏ (range selection toggle)
+                let pane = self.explorer_state.get_active_pane_mut();
+                if let Some(anchor) = pane.shift_anchor {
+                    if anchor == pane.selected_idx {
+                        // Lần nhấn thứ 3 hoặc nhấn tại chỗ: Hủy bỏ neo
+                        pane.shift_anchor = None;
+                        pane.shift_active = false;
+                    } else if !pane.shift_active {
+                        // Lần nhấn thứ 2: Toggle từ anchor đến vị trí hiện tại
+                        let start = anchor.min(pane.selected_idx);
+                        let end = anchor.max(pane.selected_idx);
+                        for i in start..=end {
+                            if i < pane.items.len() && pane.items[i].name != ".." {
+                                let name = pane.items[i].name.clone();
+                                if pane.selected_names.contains(&name) {
+                                    pane.selected_names.remove(&name);
+                                } else {
+                                    pane.selected_names.insert(name);
+                                }
+                            }
+                        }
+                        pane.shift_active = true;
+                    } else {
+                        // Lần nhấn thứ 3: Hủy bỏ neo
+                        pane.shift_anchor = None;
+                        pane.shift_active = false;
+                    }
+                } else {
+                    // Lần nhấn thứ 1: Đặt anchor
+                    pane.shift_anchor = Some(pane.selected_idx);
+                    pane.shift_active = false;
+                }
+            }
+            KeyCode::Char('V') | KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                // Alt+V: Toggle chọn 1 mục đơn lẻ (không di chuyển dòng)
+                let pane = self.explorer_state.get_active_pane_mut();
+                if !pane.items.is_empty() {
+                    let idx = pane.selected_idx;
+                    let name = pane.items[idx].name.clone();
+                    if name != ".." {
+                        if pane.selected_names.contains(&name) {
+                            pane.selected_names.remove(&name);
+                        } else {
+                            pane.selected_names.insert(name);
+                        }
                     }
                 }
             }
             KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+C: Sao chép đường dẫn metadata vào clipboard nội bộ
+                // Ctrl+C: Sao chép vào clipboard nội bộ (hỗ trợ multi-select)
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
-                    let item = &pane.items[pane.selected_idx];
-                    if item.name != ".." {
-                        self.explorer_state.clipboard = Some(ui::explorer::ClipboardItem {
-                            remote: pane.remote.clone(),
-                            path: pane.path.clone(),
-                            name: item.name.clone(),
-                            is_dir: item.is_dir,
-                        });
+                    if !pane.selected_names.is_empty() {
+                        // Multi-select: sao chép tất cả các mục đã chọn
+                        let items: Vec<ui::explorer::ClipboardItem> = pane.items.iter()
+                            .filter(|item| pane.selected_names.contains(&item.name))
+                            .map(|item| ui::explorer::ClipboardItem {
+                                remote: pane.remote.clone(),
+                                path: pane.path.clone(),
+                                name: item.name.clone(),
+                                is_dir: item.is_dir,
+                            })
+                            .collect();
+                        self.explorer_state.clipboard_items = Some(items);
+                        self.explorer_state.clipboard = None;
+                    } else {
+                        // Single select
+                        let item = &pane.items[pane.selected_idx];
+                        if item.name != ".." {
+                            self.explorer_state.clipboard = Some(ui::explorer::ClipboardItem {
+                                remote: pane.remote.clone(),
+                                path: pane.path.clone(),
+                                name: item.name.clone(),
+                                is_dir: item.is_dir,
+                            });
+                            self.explorer_state.clipboard_items = None;
+                        }
                     }
                 }
             }
-            KeyCode::Char('o') | KeyCode::Char('O') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('o') | KeyCode::Char('O') if key.modifiers.contains(KeyModifiers::ALT) => {
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
                     let selected = &pane.items[pane.selected_idx];
@@ -5750,52 +6298,231 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 }
             }
             KeyCode::Char('v') | KeyCode::Char('V') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(ref clipboard_item) = self.explorer_state.clipboard {
+                // Ctrl+V: Dán (hỗ trợ multi-select)
+                if let Some(ref items) = self.explorer_state.clipboard_items {
+                    if !items.is_empty() {
+                        // Multi-paste: Sao chép tuần tự tất cả các mục, bỏ qua popup đổi tên
+                        let dest_pane = self.explorer_state.get_active_pane();
+                        let dest_remote = dest_pane.remote.clone();
+                        let dest_path = dest_pane.path.clone();
+                        let items_clone = items.clone();
+                        let tx_op = tx.clone();
+                        let pane_type = self.explorer_state.active_pane.clone();
+
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                            src: format!("({} mục)", items_clone.len()),
+                            dest: if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) },
+                            pct: 0.0,
+                            job_id: None,
+                        };
+
+                        tokio::spawn(async move {
+                            let total = items_clone.len();
+                            let mut last_err = None;
+                            for (idx, clip_item) in items_clone.iter().enumerate() {
+                                let src = if clip_item.remote.is_empty() {
+                                    PathBuf::from(&clip_item.path)
+                                        .join(&clip_item.name)
+                                        .to_string_lossy()
+                                        .to_string()
+                                } else {
+                                    format!("{}:{}/{}", clip_item.remote.trim_end_matches(':'), clip_item.path.trim_start_matches('/'), clip_item.name)
+                                };
+                                let dest = if dest_remote.is_empty() {
+                                    PathBuf::from(&dest_path)
+                                        .join(&clip_item.name)
+                                        .to_string_lossy()
+                                        .to_string()
+                                } else {
+                                    format!("{}:{}/{}", dest_remote.trim_end_matches(':'), dest_path.trim_start_matches('/'), clip_item.name)
+                                };
+
+                                let pct = ((idx as f64) / total as f64) * 100.0;
+                                let _ = tx_op.send(AppEvent::CopyProgress {
+                                    src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
+                                    dest: dest.clone(),
+                                    pct,
+                                    job_id: None,
+                                });
+
+                                let method = if clip_item.is_dir {
+                                    "sync/copy"
+                                } else {
+                                    "operations/copyfile"
+                                };
+                                let param = if clip_item.is_dir {
+                                    json!({ "srcFs": src, "dstFs": dest })
+                                } else {
+                                    json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": clip_item.name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": clip_item.name })
+                                };
+
+                                let res = run_rpc_job_async(method.to_string(), param).await;
+                                if let Err(e) = res {
+                                    last_err = Some(e);
+                                }
+                            }
+                            let _ = tx_op.send(AppEvent::CopyProgress {
+                                src: format!("({} mục)", total),
+                                dest: String::new(),
+                                pct: 100.0,
+                                job_id: None,
+                            });
+                            let result = match last_err {
+                                None => Ok(()),
+                                Some(e) => Err(e),
+                            };
+                            let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                                pane: pane_type,
+                                op_name: "sao chép nhiều mục".to_string(),
+                                result,
+                            });
+                        });
+                    }
+                } else if let Some(ref clipboard_item) = self.explorer_state.clipboard {
                     self.explorer_state.popup = ui::explorer::ExplorerPopup::InputPasteRename {
                         input_buffer: clipboard_item.name.clone(),
                     };
                 }
             }
             KeyCode::Char('x') | KeyCode::Char('X') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+X: Di chuyển sang pane đối diện
+                // Ctrl+X: Di chuyển sang pane đối diện (hỗ trợ multi-select)
                 let src_pane = self.explorer_state.get_active_pane();
                 if !src_pane.items.is_empty() {
-                    let item = &src_pane.items[src_pane.selected_idx];
-                    if item.name == ".." {
-                        return;
+                    if !src_pane.selected_names.is_empty() {
+                        // Multi-move: Di chuyển tất cả mục đã chọn
+                        let items: Vec<(String, bool)> = src_pane.items.iter()
+                            .filter(|item| src_pane.selected_names.contains(&item.name))
+                            .map(|item| (item.name.clone(), item.is_dir))
+                            .collect();
+                        let src_remote = src_pane.remote.clone();
+                        let src_path = src_pane.path.clone();
+
+                        let dest_pane = match self.explorer_state.active_pane {
+                            ui::explorer::ActivePane::Left => &self.explorer_state.right_pane,
+                            ui::explorer::ActivePane::Right => &self.explorer_state.left_pane,
+                        };
+                        let dest_remote = dest_pane.remote.clone();
+                        let dest_path = dest_pane.path.clone();
+                        let pane_type = self.explorer_state.active_pane.clone();
+                        let tx_op = tx.clone();
+
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::MoveProgress {
+                            src: format!("({} mục)", items.len()),
+                            dest: if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) },
+                            pct: 0.0,
+                            job_id: None,
+                        };
+
+                        // Xoá selection sau khi bắt đầu di chuyển
+                        self.explorer_state.get_active_pane_mut().selected_names.clear();
+
+                        tokio::spawn(async move {
+                            let total = items.len();
+                            let mut last_err = None;
+                            for (idx, (item_name, is_dir)) in items.iter().enumerate() {
+                                let src = if src_remote.is_empty() {
+                                    PathBuf::from(&src_path)
+                                        .join(item_name)
+                                        .to_string_lossy()
+                                        .to_string()
+                                } else {
+                                    format!("{}:{}/{}", src_remote.trim_end_matches(':'), src_path.trim_start_matches('/'), item_name)
+                                };
+                                let dest = if dest_remote.is_empty() {
+                                    PathBuf::from(&dest_path)
+                                        .join(item_name)
+                                        .to_string_lossy()
+                                        .to_string()
+                                } else {
+                                    format!("{}:{}/{}", dest_remote.trim_end_matches(':'), dest_path.trim_start_matches('/'), item_name)
+                                };
+
+                                let pct = ((idx as f64) / total as f64) * 100.0;
+                                let _ = tx_op.send(AppEvent::MoveProgress {
+                                    src: format!("({}/{}) {}", idx + 1, total, item_name),
+                                    dest: dest.clone(),
+                                    pct,
+                                    job_id: None,
+                                });
+
+                                let method = if *is_dir {
+                                    "sync/move"
+                                } else {
+                                    "operations/movefile"
+                                };
+                                let param = if *is_dir {
+                                    json!({ "srcFs": src, "dstFs": dest })
+                                } else {
+                                    json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": item_name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": item_name })
+                                };
+
+                                let res = run_rpc_job_async(method.to_string(), param).await;
+                                if let Err(e) = res {
+                                    last_err = Some(e);
+                                }
+                            }
+                            let _ = tx_op.send(AppEvent::MoveProgress {
+                                src: format!("({} mục)", total),
+                                dest: String::new(),
+                                pct: 100.0,
+                                job_id: None,
+                            });
+                            let result = match last_err {
+                                None => Ok(()),
+                                Some(e) => Err(e),
+                            };
+                            let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                                pane: pane_type,
+                                op_name: "di chuyển nhiều mục".to_string(),
+                                result,
+                            });
+                        });
+                    } else {
+                        let item = &src_pane.items[src_pane.selected_idx];
+                        if item.name == ".." {
+                            return;
+                        }
+                        let is_dir = item.is_dir;
+                        let src = if src_pane.remote.is_empty() {
+                            PathBuf::from(&src_pane.path)
+                                .join(&item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            format!("{}:{}/{}", src_pane.remote.trim_end_matches(':'), src_pane.path.trim_start_matches('/'), item.name)
+                        };
+
+                        let dest_pane = match self.explorer_state.active_pane {
+                            ui::explorer::ActivePane::Left => &self.explorer_state.right_pane,
+                            ui::explorer::ActivePane::Right => &self.explorer_state.left_pane,
+                        };
+                        let dest = if dest_pane.remote.is_empty() {
+                            PathBuf::from(&dest_pane.path)
+                                .join(&item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            format!("{}:{}/{}", dest_pane.remote.trim_end_matches(':'), dest_pane.path.trim_start_matches('/'), item.name)
+                        };
+
+                        self.check_features_and_execute("move", src, dest, is_dir, tx.clone());
                     }
-                    let is_dir = item.is_dir;
-                    let src = if src_pane.remote.is_empty() {
-                        PathBuf::from(&src_pane.path)
-                            .join(&item.name)
-                            .to_string_lossy()
-                            .to_string()
-                    } else {
-                        format!("{}:{}/{}", src_pane.remote.trim_end_matches(':'), src_pane.path.trim_start_matches('/'), item.name)
-                    };
-
-                    let dest_pane = match self.explorer_state.active_pane {
-                        ui::explorer::ActivePane::Left => &self.explorer_state.right_pane,
-                        ui::explorer::ActivePane::Right => &self.explorer_state.left_pane,
-                    };
-                    let dest = if dest_pane.remote.is_empty() {
-                        PathBuf::from(&dest_pane.path)
-                            .join(&item.name)
-                            .to_string_lossy()
-                            .to_string()
-                    } else {
-                        format!("{}:{}/{}", dest_pane.remote.trim_end_matches(':'), dest_pane.path.trim_start_matches('/'), item.name)
-                    };
-
-                    self.check_features_and_execute("move", src, dest, is_dir, tx.clone());
                 }
             }
-            KeyCode::Char('t') | KeyCode::Char('T') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('t') | KeyCode::Char('T') if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Ctrl+T: Đồng bộ
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::SyncConfirm;
             }
             KeyCode::Char(' ') => {
+                // Space: Xoá clipboard và selection
                 self.explorer_state.clipboard = None;
+                self.explorer_state.clipboard_items = None;
+                let pane = self.explorer_state.get_active_pane_mut();
+                pane.selected_names.clear();
+                pane.shift_anchor = None;
+                pane.shift_active = false;
+                pane.alt_anchor = None;
+                pane.alt_active = false;
             }
             _ => {}
         }
@@ -6519,19 +7246,33 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         KeyCode::Enter => {
                             let folder_name = input_buffer.trim().to_string();
                             if !folder_name.is_empty() {
-                                let fs_target = if remote.is_empty() {
+                                let is_local = remote.is_empty();
+                                let parent_fs = if is_local {
                                     current_path.clone()
                                 } else {
                                     format!("{}{}", remote, current_path)
                                 };
-                                let fs_target = if fs_target.ends_with('/') {
-                                    format!("{}{}", fs_target, folder_name)
+                                let fs_target = if parent_fs.ends_with('/') {
+                                    format!("{}{}", parent_fs, folder_name)
                                 } else {
-                                    format!("{}/{}", fs_target, folder_name)
+                                    format!("{}/{}", parent_fs, folder_name)
                                 };
+
+                                let param = if is_local {
+                                    serde_json::json!({
+                                        "fs": fs_target,
+                                        "remote": "",
+                                    })
+                                } else {
+                                    serde_json::json!({
+                                        "fs": parent_fs,
+                                        "remote": folder_name,
+                                    })
+                                }
+                                .to_string();
+
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
-                                    let is_local = !fs_target.contains(':') || fs_target.starts_with('/');
                                     if is_local {
                                         if std::fs::create_dir_all(&fs_target).is_err() {
                                             let _ = std::process::Command::new("pkexec")
@@ -6539,10 +7280,6 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                                 .status();
                                         }
                                     } else {
-                                        let param = serde_json::json!({
-                                            "fs": fs_target,
-                                            "remote": "",
-                                        }).to_string();
                                         let _ = rclone::rpc_async("operations/mkdir".to_string(), param).await;
                                     }
                                     let _ = tx_clone.send(AppEvent::WizardGuiRefresh);
@@ -8539,14 +9276,23 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             src: archive_name.clone(),
             dest: dest_fs.clone(),
             pct: 0.0,
+            job_id: None,
         };
         
         let tx_clone = tx.clone();
+        let src_fs_clone = src_fs.clone();
+        let dest_fs_clone = dest_fs.clone();
+        let archive_name_clone = archive_name.clone();
         tokio::spawn(async move {
-            let res = run_rpc_job_async("sync/copy".to_string(), json!({
-                "srcFs": src_fs,
-                "dstFs": dest_fs,
-            })).await;
+            let res = run_rpc_job_async_with_progress(
+                "sync/copy".to_string(),
+                json!({
+                    "srcFs": src_fs_clone,
+                    "dstFs": dest_fs_clone,
+                }),
+                Some((archive_name_clone, dest_fs_clone, true)),
+                Some(tx_clone.clone()),
+            ).await;
             
             let _ = tx_clone.send(AppEvent::ExplorerOperationFinished {
                 pane: ui::explorer::ActivePane::Left,
@@ -8566,6 +9312,62 @@ async fn run_rpc_job_async(
         _ => serde_json::Map::new(),
     };
     param_obj.insert("_async".to_string(), serde_json::Value::Bool(true));
+    let desc = if let Some(d) = param_obj.get("_description").and_then(|d| d.as_str()) {
+        d.to_string()
+    } else {
+        let desc_str = match method.as_str() {
+            "sync/copy" => {
+                let src = param_obj.get("srcFs").and_then(|s| s.as_str()).unwrap_or("");
+                let dst = param_obj.get("dstFs").and_then(|d| d.as_str()).unwrap_or("");
+                format!("Sao chép thư mục: {} -> {}", src, dst)
+            }
+            "sync/move" => {
+                let src = param_obj.get("srcFs").and_then(|s| s.as_str()).unwrap_or("");
+                let dst = param_obj.get("dstFs").and_then(|d| d.as_str()).unwrap_or("");
+                format!("Di chuyển thư mục: {} -> {}", src, dst)
+            }
+            "sync/sync" => {
+                let src = param_obj.get("srcFs").and_then(|s| s.as_str()).unwrap_or("");
+                let dst = param_obj.get("dstFs").and_then(|d| d.as_str()).unwrap_or("");
+                format!("Đồng bộ thư mục: {} -> {}", src, dst)
+            }
+            "operations/copyfile" => {
+                let remote = param_obj.get("srcRemote").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Sao chép tệp: {}", remote)
+            }
+            "operations/movefile" => {
+                let remote = param_obj.get("srcRemote").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Di chuyển tệp: {}", remote)
+            }
+            "operations/deletefile" => {
+                let remote = param_obj.get("remote").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Xóa tệp: {}", remote)
+            }
+            "operations/purge" => {
+                let fs = param_obj.get("fs").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Xóa thư mục: {}", fs)
+            }
+            "operations/mkdir" => {
+                let fs = param_obj.get("fs").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Tạo thư mục: {}", fs)
+            }
+            "operations/rmdir" => {
+                let fs = param_obj.get("fs").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Xóa thư mục rỗng: {}", fs)
+            }
+            "operations/rmdirs" => {
+                let fs = param_obj.get("fs").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Xóa các thư mục rỗng đệ quy: {}", fs)
+            }
+            "operations/cleanup" => {
+                let fs = param_obj.get("fs").and_then(|r| r.as_str()).unwrap_or("");
+                format!("Dọn dẹp: {}", fs)
+            }
+            _ => format!("Tác vụ: {}", method),
+        };
+        param_obj.insert("_description".to_string(), serde_json::Value::String(desc_str.clone()));
+        desc_str
+    };
     let param_str = serde_json::Value::Object(param_obj).to_string();
 
     let op_res = rclone::rpc_async(method, param_str).await;
@@ -8577,6 +9379,7 @@ async fn run_rpc_job_async(
     }
 
     if let Some(id) = job_id {
+        register_job_description(id, desc);
         let mut status = "running".to_string();
         let mut err_msg = String::new();
         while status == "running" {
@@ -8606,6 +9409,166 @@ async fn run_rpc_job_async(
                 }
             }
         }
+        if status == "success" {
+            Ok(())
+        } else {
+            Err(err_msg)
+        }
+    } else {
+        Err("Không lấy được Job ID từ Rclone".to_string())
+    }
+}
+
+async fn run_rpc_job_async_with_progress(
+    method: String,
+    param: serde_json::Value,
+    progress_info: Option<(String, String, bool)>,
+    tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+) -> Result<(), String> {
+    let mut param_obj = match param {
+        serde_json::Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    param_obj.insert("_async".to_string(), serde_json::Value::Bool(true));
+    let desc = if let Some(d) = param_obj.get("_description").and_then(|d| d.as_str()) {
+        d.to_string()
+    } else {
+        let desc_str = match &progress_info {
+            Some((src, dest, is_copy)) => {
+                if *is_copy {
+                    format!("Sao chép: {} -> {}", src, dest)
+                } else {
+                    format!("Di chuyển: {} -> {}", src, dest)
+                }
+            }
+            None => {
+                match method.as_str() {
+                    "sync/copy" => "Sao chép thư mục".to_string(),
+                    "sync/move" => "Di chuyển thư mục".to_string(),
+                    _ => format!("Tác vụ: {}", method),
+                }
+            }
+        };
+        param_obj.insert("_description".to_string(), serde_json::Value::String(desc_str.clone()));
+        desc_str
+    };
+    let param_str = serde_json::Value::Object(param_obj).to_string();
+
+    let op_res = rclone::rpc_async(method, param_str).await;
+    let mut job_id = None;
+    if let Ok(r) = op_res {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&r.output) {
+            job_id = val.get("jobid").and_then(|j| j.as_i64());
+        }
+    }
+
+    if let Some(id) = job_id {
+        register_job_description(id, desc);
+        let mut status = "running".to_string();
+        let mut err_msg = String::new();
+        while status == "running" {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            if let Some((ref src, ref dest, is_copy)) = progress_info {
+                if let Some(ref tx_sender) = tx {
+                    if let Ok(stats_res) = rclone::rpc_async("core/stats".to_string(), json!({ "group": format!("job/{}", id) }).to_string()).await {
+                        if let Ok(stats_val) = serde_json::from_str::<serde_json::Value>(&stats_res.output) {
+                            let src_filename = std::path::Path::new(src)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| src.clone());
+
+                            let mut found_pct = None;
+                            if let Some(transfers) = stats_val.get("transferring").and_then(|t| t.as_array()) {
+                                for t_val in transfers {
+                                    let t_name = t_val.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    if t_name == src_filename || src.ends_with(t_name) || t_name.ends_with(&src_filename) {
+                                        if let Some(p) = t_val.get("percentage").and_then(|p| p.as_f64()) {
+                                            found_pct = Some(p);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            let pct = found_pct.unwrap_or_else(|| {
+                                let bytes = stats_val.get("bytes").and_then(|b| b.as_f64()).unwrap_or(0.0);
+                                let total_bytes = stats_val.get("totalBytes").and_then(|t| t.as_f64()).unwrap_or(0.0);
+                                if total_bytes > 0.0 {
+                                    (bytes / total_bytes) * 100.0
+                                } else {
+                                    0.0
+                                }
+                            });
+
+                            let display_pct = pct.min(99.0);
+
+                            if is_copy {
+                                let _ = tx_sender.send(AppEvent::CopyProgress {
+                                    src: src.clone(),
+                                    dest: dest.clone(),
+                                    pct: display_pct,
+                                    job_id: Some(id),
+                                });
+                            } else {
+                                let _ = tx_sender.send(AppEvent::MoveProgress {
+                                    src: src.clone(),
+                                    dest: dest.clone(),
+                                    pct: display_pct,
+                                    job_id: Some(id),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            let status_res = rclone::rpc_async(
+                "job/status".to_string(),
+                json!({ "jobid": id }).to_string(),
+            )
+            .await;
+            if let Ok(sr) = status_res {
+                if let Ok(sval) = serde_json::from_str::<serde_json::Value>(&sr.output) {
+                    if let Some(finished) = sval.get("finished").and_then(|f| f.as_bool()) {
+                        if finished {
+                            if let Some(err) = sval.get("error").and_then(|e| e.as_str()) {
+                                if !err.is_empty() {
+                                    status = "failed".to_string();
+                                    err_msg = err.to_string();
+                                } else {
+                                    status = "success".to_string();
+                                }
+                            } else {
+                                status = "success".to_string();
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((ref src, ref dest, is_copy)) = progress_info {
+            if let Some(ref tx_sender) = tx {
+                if is_copy {
+                    let _ = tx_sender.send(AppEvent::CopyProgress {
+                        src: src.clone(),
+                        dest: dest.clone(),
+                        pct: 100.0,
+                        job_id: Some(id),
+                    });
+                } else {
+                    let _ = tx_sender.send(AppEvent::MoveProgress {
+                        src: src.clone(),
+                        dest: dest.clone(),
+                        pct: 100.0,
+                        job_id: Some(id),
+                    });
+                }
+            }
+        }
+
         if status == "success" {
             Ok(())
         } else {
