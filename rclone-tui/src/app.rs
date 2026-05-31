@@ -84,6 +84,9 @@ pub enum AppEvent {
     OAuthFinished {
         result: Result<(), String>,
     },
+    OAuthUrlReceived {
+        url: String,
+    },
     ActiveServicesLoaded(Vec<ui::services::ActiveService>),
     RemoteStatusUpdate {
         remote: String,
@@ -2950,6 +2953,22 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             self.load_remotes(tx.clone()).await;
                         }
                     }
+                    AppEvent::OAuthUrlReceived { url } => {
+                        if let ui::connection::WizardState::SimpleOAuthLoop {
+                            provider,
+                            remote_name,
+                            selected_providers,
+                            ..
+                        } = &self.connection_state.wizard
+                        {
+                            self.connection_state.wizard = ui::connection::WizardState::SimpleOAuthLoop {
+                                provider: provider.clone(),
+                                remote_name: remote_name.clone(),
+                                auth_url: url,
+                                selected_providers: selected_providers.clone(),
+                            };
+                        }
+                    }
                     AppEvent::ActiveServicesLoaded(services) => {
                         self.services_state.active_services = services;
                     }
@@ -4304,6 +4323,25 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     }
                                 }
                             });
+
+                            let tx_poll = tx.clone();
+                            tokio::spawn(async move {
+                                // Poll config/oauthstatus for 60 seconds (300 iterations * 200ms)
+                                for _ in 0..300 {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                                    let status_res = rclone::rpc_async("config/oauthstatus".to_string(), "{}".to_string()).await;
+                                    if let Ok(res) = status_res {
+                                        if let Ok(status_val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                                            if status_val.get("status").and_then(|s| s.as_str()) == Some("running") {
+                                                if let Some(auth_url) = status_val.get("authUrl").and_then(|u| u.as_str()) {
+                                                    let _ = tx_poll.send(AppEvent::OAuthUrlReceived { url: auth_url.to_string() });
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
                         } else if selected_idx == 1 {
                             // Headless OAuth
                             self.connection_state.wizard =
@@ -4512,6 +4550,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 if key.code == KeyCode::Esc {
                     // Hủy OAuth
                     self.connection_state.wizard = ui::connection::WizardState::None;
+                    tokio::spawn(async move {
+                        let _ = rclone::rpc_async("config/oauthstop".to_string(), "{}".to_string()).await;
+                    });
                 }
             }
             ui::connection::WizardState::AdvancedSetup {
