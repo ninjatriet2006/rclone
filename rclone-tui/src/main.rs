@@ -62,7 +62,7 @@ fn check_terminal_wrapping() {
                             .spawn(),
                         _ => Command::new(term)
                             .env("RCLONE_TUI_WRAPPED", "1")
-                            .args(["/c", "start", current_exe.to_str().unwrap()])
+                            .args(["/c", "start", "", current_exe.to_str().unwrap()])
                             .spawn(),
                     };
                     if status.is_ok() {

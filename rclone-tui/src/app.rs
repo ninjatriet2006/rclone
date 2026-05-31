@@ -224,10 +224,10 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
     None
 }
 
-    fn detect_systemd_service(pid: u32) -> Option<(String, bool)> {
+    fn detect_systemd_service(_pid: u32) -> Option<(String, bool)> {
         #[cfg(unix)]
         {
-            if let Ok(content) = std::fs::read_to_string(format!("/proc/{}/cgroup", pid)) {
+            if let Ok(content) = std::fs::read_to_string(format!("/proc/{}/cgroup", _pid)) {
                 for line in content.lines() {
                     let parts: Vec<&str> = line.split(':').collect();
                     if parts.len() >= 3 {
@@ -531,35 +531,85 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
 
         #[cfg(target_os = "windows")]
         {
+            let mut wmic_success = false;
             if let Ok(output) = std::process::Command::new("wmic")
                 .args(["process", "where", "name='rclone.exe'", "get", "CommandLine,ProcessId", "/FORMAT:list"])
                 .output()
             {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let mut current_cmdline = String::new();
-                let mut current_pid: Option<u32> = None;
+                if output.status.success() {
+                    wmic_success = true;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let mut current_cmdline = String::new();
+                    let mut current_pid: Option<u32> = None;
 
-                for line in stdout.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if line.starts_with("CommandLine=") {
-                        current_cmdline = line["CommandLine=".len()..].trim().to_string();
-                    } else if line.starts_with("ProcessId=") {
-                        if let Ok(pid) = line["ProcessId=".len()..].trim().parse::<u32>() {
-                            current_pid = Some(pid);
+                    for line in stdout.lines() {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if line.starts_with("CommandLine=") {
+                            current_cmdline = line["CommandLine=".len()..].trim().to_string();
+                        } else if line.starts_with("ProcessId=") {
+                            if let Ok(pid) = line["ProcessId=".len()..].trim().parse::<u32>() {
+                                current_pid = Some(pid);
+                            }
+                        }
+
+                        if !current_cmdline.is_empty() && current_pid.is_some() {
+                            let pid = current_pid.unwrap();
+                            let args = parse_cmdline(&current_cmdline);
+                            if let Some(service) = self.parse_rclone_args(pid, &args) {
+                                scanned_services.push(service);
+                            }
+                            current_cmdline.clear();
+                            current_pid = None;
                         }
                     }
+                }
+            }
 
-                    if !current_cmdline.is_empty() && current_pid.is_some() {
-                        let pid = current_pid.unwrap();
-                        let args = parse_cmdline(&current_cmdline);
-                        if let Some(service) = self.parse_rclone_args(pid, &args) {
-                            scanned_services.push(service);
+            // Fallback sang PowerShell nếu WMIC thất bại hoặc không có sẵn
+            if !wmic_success {
+                if let Ok(output) = std::process::Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        "Get-CimInstance Win32_Process -Filter \"name = 'rclone.exe'\" | Select-Object CommandLine, ProcessId | Format-List"
+                    ])
+                    .output()
+                {
+                    if output.status.success() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let mut current_cmdline = String::new();
+                        let mut current_pid: Option<u32> = None;
+
+                        for line in stdout.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            if line.starts_with("CommandLine") {
+                                if let Some(pos) = line.find(':') {
+                                    current_cmdline = line[pos + 1..].trim().to_string();
+                                }
+                            } else if line.starts_with("ProcessId") {
+                                if let Some(pos) = line.find(':') {
+                                    if let Ok(pid) = line[pos + 1..].trim().parse::<u32>() {
+                                        current_pid = Some(pid);
+                                    }
+                                }
+                            }
+
+                            if !current_cmdline.is_empty() && current_pid.is_some() {
+                                let pid = current_pid.unwrap();
+                                let args = parse_cmdline(&current_cmdline);
+                                if let Some(service) = self.parse_rclone_args(pid, &args) {
+                                    scanned_services.push(service);
+                                }
+                                current_cmdline.clear();
+                                current_pid = None;
+                            }
                         }
-                        current_cmdline.clear();
-                        current_pid = None;
                     }
                 }
             }
@@ -8670,10 +8720,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 }
  
                 // Chạy lệnh mount độc lập dưới quyền user hiện tại
+                let rclone_cmd = get_rclone_cmd();
                 #[cfg(unix)]
-                let child = Command::new("setsid").arg("rclone").args(&args).spawn();
+                let child = Command::new("setsid").arg(&rclone_cmd).args(&args).spawn();
                 #[cfg(not(unix))]
-                let child = Command::new("rclone").args(&args).spawn();
+                let child = Command::new(&rclone_cmd).args(&args).spawn();
                 match child {
                     Ok(c) => {
                         let pid = c.id();
@@ -8713,7 +8764,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     args.push("--rc-no-auth".to_string());
                 }
 
-                let child = Command::new("rclone").args(&args).spawn();
+                let rclone_cmd = get_rclone_cmd();
+                let child = Command::new(&rclone_cmd).args(&args).spawn();
                 match child {
                     Ok(c) => {
                         let pid = c.id();
@@ -8764,7 +8816,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     args.push("--read-only".to_string());
                 }
 
-                let child = Command::new("rclone").args(&args).spawn();
+                let rclone_cmd = get_rclone_cmd();
+                let child = Command::new(&rclone_cmd).args(&args).spawn();
                 match child {
                     Ok(c) => {
                         let pid = c.id();
@@ -9739,5 +9792,20 @@ fn parse_cmdline(cmdline: &str) -> Vec<String> {
         args.push(current);
     }
     args
+}
+
+fn get_rclone_cmd() -> String {
+    if let Ok(mut exe_path) = std::env::current_exe() {
+        exe_path.pop(); // Thư mục chứa file exe hiện tại
+        let local_rclone = if cfg!(target_os = "windows") {
+            exe_path.join("rclone.exe")
+        } else {
+            exe_path.join("rclone")
+        };
+        if local_rclone.exists() {
+            return local_rclone.to_string_lossy().to_string();
+        }
+    }
+    "rclone".to_string()
 }
 
