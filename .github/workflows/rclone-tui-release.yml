@@ -144,6 +144,7 @@ jobs:
         shell: bash
         env:
           CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
+          RUSTFLAGS: ${{ runner.os == 'macOS' && '-C link-arg=-lresolv' || '' }}
         run: |
           cd rclone-tui
           cargo build --release --target ${{ matrix.target }}
