@@ -492,7 +492,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
     pub fn scan_running_services(&mut self) {
         let mut scanned_services = Vec::new();
 
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             if let Ok(entries) = fs::read_dir("/proc") {
                 for entry in entries {
@@ -521,6 +521,34 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(output) = std::process::Command::new("ps")
+                .args(["-ax", "-o", "pid,command"])
+                .output()
+            {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    for line in stdout.lines().skip(1) { // Skip header line
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if let Some(pos) = line.find(' ') {
+                            let pid_str = &line[..pos];
+                            let cmdline = &line[pos..].trim();
+                            if let Ok(pid) = pid_str.parse::<u32>() {
+                                let args = parse_cmdline(cmdline);
+                                if let Some(service) = self.parse_rclone_args(pid, &args) {
+                                    scanned_services.push(service);
                                 }
                             }
                         }
@@ -619,7 +647,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
     }
 
     /// Quét các dịch vụ systemd (rclone) cấp hệ thống và cấp cá nhân
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     pub fn scan_systemd_services(&mut self) {
         let mut services_map = std::collections::HashMap::new();
 
@@ -761,8 +789,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
           self.services_state.systemd_services = services;
       }
 
-    /// Quét các dịch vụ systemd (rclone) cấp hệ thống và cấp cá nhân (không hoạt động trên Windows)
-    #[cfg(not(unix))]
+    /// Quét các dịch vụ systemd (rclone) cấp hệ thống và cấp cá nhân (không hoạt động trên Windows/macOS)
+    #[cfg(any(not(unix), target_os = "macos"))]
     pub fn scan_systemd_services(&mut self) {
         self.services_state.systemd_services.clear();
     }
@@ -3886,7 +3914,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             }
                         }
                     }
-                    KeyCode::Char('e') | KeyCode::Char('E') if key.modifiers.contains(KeyModifiers::ALT) => {
+                    KeyCode::Char('e') | KeyCode::Char('E') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                         // Chỉnh sửa kết nối
                         if !self.connection_state.remotes.is_empty() {
                             let selected_remote = self.connection_state.remotes
@@ -4062,6 +4090,97 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                             };
                                     }
                                 }
+                            }
+                        }
+                    }
+                    KeyCode::Char('?') => {
+                        if !self.connection_state.remotes.is_empty() {
+                            let selected_remote = self.connection_state.remotes
+                                [self.connection_state.selected_idx]
+                                .clone();
+
+                            // 1. Kiểm tra cấu hình xem có phải remote dạng union không
+                            let param = json!({"name": selected_remote}).to_string();
+                            let mut is_union = false;
+                            let mut upstreams = Vec::new();
+                            if let Ok(rpc_res) = rclone::rpc_async("config/get".to_string(), param).await {
+                                if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
+                                    if let Some(cfg_obj) = val.as_object() {
+                                        if cfg_obj.get("type").and_then(|v| v.as_str()) == Some("union") {
+                                            is_union = true;
+                                            if let Some(upstreams_str) = cfg_obj.get("upstreams").and_then(|v| v.as_str()) {
+                                                for u in upstreams_str.split(|c| c == ' ' || c == ',') {
+                                                    let u = u.trim();
+                                                    if !u.is_empty() {
+                                                        let r_name = match u.find(':') {
+                                                            Some(idx) => &u[..idx],
+                                                            None => u,
+                                                        };
+                                                        if !r_name.is_empty() && !upstreams.contains(&r_name.to_string()) {
+                                                            upstreams.push(r_name.to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2. Truy vấn tính năng của remote (và các remote thành viên nếu là union)
+                            let mut remotes_to_check = vec![selected_remote.clone()];
+                            if is_union {
+                                for u in &upstreams {
+                                    if !remotes_to_check.contains(u) {
+                                        remotes_to_check.push(u.clone());
+                                    }
+                                }
+                            }
+
+                            let mut remote_features = Vec::new();
+                            for r in remotes_to_check {
+                                let param = json!({ "fs": format!("{}:", r) }).to_string();
+                                if let Ok(res) = rclone::rpc_async("operations/fsinfo".to_string(), param).await {
+                                    if res.status == 200 {
+                                        if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
+                                            if let Some(feats) = val.get("Features").and_then(|f| f.as_object()) {
+                                                let mut feat_list = Vec::new();
+                                                for (k, v) in feats {
+                                                    if let Some(b) = v.as_bool() {
+                                                        feat_list.push((k.clone(), b));
+                                                    }
+                                                }
+                                                feat_list.sort_by(|a, b| a.0.cmp(&b.0));
+                                                remote_features.push((r, feat_list));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !remote_features.is_empty() {
+                                let selected_feats = remote_features.iter().find(|(name, _)| name == &selected_remote)
+                                    .map(|(_, list)| list.clone()).unwrap_or_default();
+
+                                let union_remotes_features = if is_union {
+                                    let mut up_list = Vec::new();
+                                    for u in &upstreams {
+                                        if let Some((_, list)) = remote_features.iter().find(|(name, _)| name == u) {
+                                            up_list.push((u.clone(), list.clone()));
+                                        }
+                                    }
+                                    Some(up_list)
+                                } else {
+                                    None
+                                };
+
+                                self.connection_state.wizard = ui::connection::WizardState::ShowFeatures {
+                                    remote_name: selected_remote,
+                                    features: selected_feats,
+                                    union_remotes_features,
+                                };
+                            } else {
+                                self.connection_state.error_message = Some("Không thể tải thông tin tính năng của remote này.".to_string());
                             }
                         }
                     }
@@ -5376,6 +5495,14 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
             }
+            ui::connection::WizardState::ShowFeatures { .. } => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        self.connection_state.wizard = ui::connection::WizardState::None;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -6237,7 +6364,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     self.refresh_explorer_pane(p_type, tx.clone()).await;
                 }
             }
-            KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 // Ctrl+R: Mở danh sách remote để lựa chọn cho pane hiện tại
                 let mut remotes = vec!["[Local System]".to_string()];
                 remotes.extend(self.connection_state.remotes.clone());
@@ -6246,12 +6373,12 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     selected_idx: 0,
                 };
             }
-            KeyCode::Char('n') | KeyCode::Char('N') if key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char('n') | KeyCode::Char('N') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::InputNewFolder {
                     input_buffer: String::new(),
                 };
             }
-            KeyCode::Char('y') | KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char('y') | KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 // Ctrl+Y: Đổi tên tệp/thư mục
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
@@ -6330,7 +6457,14 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     pane.shift_active = false;
                 }
             }
-            KeyCode::Char('V') | KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::SHIFT) => {
+            KeyCode::Char('V') | KeyCode::Char('v') | KeyCode::Char('d') | KeyCode::Char('D')
+                if ((key.code == KeyCode::Char('V') || key.code == KeyCode::Char('v'))
+                    && key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::SHIFT))
+                    || ((key.code == KeyCode::Char('d') || key.code == KeyCode::Char('D'))
+                        && cfg!(target_os = "macos")
+                        && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 // Alt+V: Toggle chọn 1 mục đơn lẻ (không di chuyển dòng)
                 let pane = self.explorer_state.get_active_pane_mut();
                 if !pane.items.is_empty() {
@@ -6377,7 +6511,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
             }
-            KeyCode::Char('o') | KeyCode::Char('O') if key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char('o') | KeyCode::Char('O') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 let pane = self.explorer_state.get_active_pane();
                 if !pane.items.is_empty() {
                     let selected = &pane.items[pane.selected_idx];
@@ -6600,7 +6734,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
             }
-            KeyCode::Char('t') | KeyCode::Char('T') if key.modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char('t') | KeyCode::Char('T') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 // Ctrl+T: Đồng bộ
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::SyncConfirm;
             }
@@ -9723,7 +9857,23 @@ fn copy_to_system_clipboard(text: &str) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        if Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn().is_ok() {
+            let mut child = Command::new("pbcopy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                stdin.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+            }
+            let _ = child.wait();
+            return Ok(());
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         if Command::new("xclip").arg("-selection").arg("clipboard").stdin(std::process::Stdio::piped()).spawn().is_ok() {
             let mut child = Command::new("xclip")

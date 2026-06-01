@@ -27,5 +27,12 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=dylib=pthread");
         println!("cargo:rustc-link-lib=dylib=dl");
+
+        let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+        if target_os == "macos" {
+            println!("cargo:rustc-link-lib=framework=CoreFoundation");
+            println!("cargo:rustc-link-lib=framework=Security");
+            println!("cargo:rustc-link-lib=framework=SystemConfiguration");
+        }
     }
 }

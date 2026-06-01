@@ -37,6 +37,16 @@ jobs:
             artifact_name: rclone-tui-windows-arm64
             binary_name: rclone-tui.exe
             command_archive: tar -a -c -f ../rclone-tui-windows-arm64.zip rclone-tui.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_name: rclone-tui-macos-amd64
+            binary_name: rclone-tui
+            command_archive: tar -czf ../rclone-tui-macos-amd64.tar.gz rclone-tui
+          - os: macos-15
+            target: aarch64-apple-darwin
+            artifact_name: rclone-tui-macos-arm64
+            binary_name: rclone-tui
+            command_archive: tar -czf ../rclone-tui-macos-arm64.tar.gz rclone-tui
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -122,6 +132,11 @@ jobs:
           GOOS: windows
           GOARCH: arm64
           CGO_ENABLED: '1'
+
+      - name: Compile Go librclone (macOS x64 & ARM64)
+        if: matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-apple-darwin'
+        run: |
+          go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
       # Compile the Rust TUI in release mode (native / non-cross-compiled)
       - name: Build Rust rclone-tui

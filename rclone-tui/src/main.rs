@@ -17,7 +17,29 @@ fn check_terminal_wrapping() {
 
     // Kiểm tra xem stdout có phải là TTY không
     if !io::stdout().is_terminal() {
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        {
+            let current_exe = env::current_exe().unwrap();
+            let current_exe_str = current_exe.to_str().unwrap();
+            let args: Vec<String> = env::args().skip(1).collect();
+            let args_str = if args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", args.join(" "))
+            };
+            let script = format!(
+                "tell application \"Terminal\" to do script \"export RCLONE_TUI_WRAPPED=1 && exec '{}'{}\"",
+                current_exe_str, args_str
+            );
+            let status = Command::new("osascript")
+                .args(["-e", &script])
+                .spawn();
+            if status.is_ok() {
+                std::process::exit(0);
+            }
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             // Tìm các terminal emulator phổ biến trên Linux/Unix
             let terminals = [
@@ -79,9 +101,15 @@ fn check_terminal_wrapping() {
 }
 
 fn check_fuse_dependency() -> bool {
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         which::which("fusermount3").is_ok() || which::which("fusermount").is_ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::path::Path::new("/Library/Filesystems/macfuse.fs").exists()
+            || std::path::Path::new("/Library/Filesystems/osxfuse.fs").exists()
+            || which::which("fuse-t").is_ok()
     }
     #[cfg(windows)]
     {
@@ -93,7 +121,7 @@ fn check_fuse_dependency() -> bool {
 
 fn ensure_dependencies() {
     if !check_fuse_dependency() {
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             println!("------------------------------------------------------------------");
             println!("CẢNH BÁO: Không phát hiện công cụ FUSE (fusermount3/fusermount) trên hệ thống.");
@@ -133,6 +161,24 @@ fn ensure_dependencies() {
                     let _ = io::stdin().read_line(&mut String::new());
                 }
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            println!("------------------------------------------------------------------");
+            println!("CẢNH BÁO: Không phát hiện thư viện FUSE tương thích trên hệ thống.");
+            println!("FUSE là bắt buộc để sử dụng chức năng Mount ổ đĩa ảo trên macOS.");
+            println!("Để sử dụng chức năng này, vui lòng cài đặt một trong các lựa chọn sau:");
+            println!("1. Cài đặt macFUSE từ https://macfuse.io/ (Khuyên dùng)");
+            println!("   Hoặc cài đặt thông qua Homebrew: brew install --cask macfuse");
+            println!("   LƯU Ý: Với máy chip Apple Silicon (M1/M2/M3+), bạn cần vào");
+            println!("   chế độ Recovery Mode để bật nạp Kernel Extension bên thứ ba.");
+            println!("2. Sử dụng FUSE-T (Không cần Kernel Extension/Recovery Mode):");
+            println!("   Chi tiết xem tại: https://github.com/macos-fuse-t/fuse-t");
+            println!("------------------------------------------------------------------");
+            print!("Nhấn Enter để tiếp tục...");
+            let _ = io::stdout().flush();
+            let _ = io::stdin().read_line(&mut String::new());
         }
 
         #[cfg(windows)]

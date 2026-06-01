@@ -20,3 +20,9 @@ __pycache__
 .DS_Store
 resource_windows_*.syso
 .devcontainer
+# rclone-tui build and packaging artifacts
+/AppDir/
+/pkg_build/
+/appimagetool-x86_64.AppImage*
+/*.deb
+/*.AppImage
