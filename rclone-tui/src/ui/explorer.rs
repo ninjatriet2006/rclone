@@ -201,6 +201,7 @@ pub struct ExplorerState {
     pub error_message: Option<String>,
     pub clipboard: Option<ClipboardItem>,
     pub clipboard_items: Option<Vec<ClipboardItem>>,
+    pub edit_cursor_idx: usize,
 }
 
 impl ExplorerState {
@@ -213,6 +214,7 @@ impl ExplorerState {
             error_message: None,
             clipboard: None,
             clipboard_items: None,
+            edit_cursor_idx: 0,
         }
     }
 
@@ -300,7 +302,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
         let msg = format!("📋 {} mục đã sao chép từ {}", count, label);
         Line::from(vec![
             Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
-            Span::styled(msg, Style::default().fg(Color::Cyan)),
+            Span::styled(msg, Style::default().fg(Color::Black)),
         ])
     } else if let Some(ref item) = state.clipboard {
         let src_display = if item.remote.is_empty() {
@@ -325,7 +327,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
 
         Line::from(vec![
             Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
-            Span::styled(msg, Style::default().fg(Color::Cyan)),
+            Span::styled(msg, Style::default().fg(Color::Black)),
         ])
     } else {
         let empty_msg = crate::lang::translate("exp_console_empty");
@@ -360,7 +362,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
     // Vẽ Popups
     match &state.popup {
         ExplorerPopup::InputNewFolder { input_buffer } => {
-            draw_input_new_folder(frame, input_buffer);
+            draw_input_new_folder(frame, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::CopyProgress { src, dest, pct, .. } => {
             let msg = crate::lang::translate("exp_copy_msg")
@@ -409,7 +411,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             draw_confirm_fallback_popup(frame, title, options, *selected_idx);
         }
         ExplorerPopup::InputRename { old_name, input_buffer, .. } => {
-            draw_input_rename(frame, old_name, input_buffer);
+            draw_input_rename(frame, old_name, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::SpecialActionsMenu { selected_idx } => {
             draw_special_actions_menu(frame, *selected_idx);
@@ -421,7 +423,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             draw_checksum_type_select(frame, *selected_idx);
         }
         ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result } => {
-            draw_cryptdecode_form(frame, remote_input, encrypted_input, *is_remote_focused, output_result.as_deref());
+            draw_cryptdecode_form(frame, remote_input, encrypted_input, *is_remote_focused, output_result.as_deref(), state.edit_cursor_idx);
         }
         ExplorerPopup::DecompressModeSelect { archive_path, selected_idx } => {
             draw_decompress_mode_select(frame, archive_path, *selected_idx);
@@ -430,7 +432,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             draw_decompress_path_input(frame, archive_path, *selected_idx);
         }
         ExplorerPopup::DecompressPathManualInput { archive_path, input_buffer } => {
-            draw_decompress_path_manual_input(frame, archive_path, input_buffer);
+            draw_decompress_path_manual_input(frame, archive_path, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::TuiExplorerSelector { archive_path, remote, path, items, selected_idx, scroll_offset, loading } => {
             draw_tui_explorer_selector(frame, archive_path, remote, path, items, *selected_idx, *scroll_offset, *loading);
@@ -439,7 +441,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             super::draw_popup(frame, title, message, 65, 40);
         }
         ExplorerPopup::InputPasteRename { input_buffer } => {
-            draw_input_paste_rename(frame, input_buffer);
+            draw_input_paste_rename(frame, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::None => {}
     }
@@ -629,21 +631,18 @@ fn draw_pane(frame: &mut Frame, pane: &mut ExplorerPane, area: Rect, is_active: 
     frame.render_widget(list, area);
 }
 
-fn draw_input_new_folder(frame: &mut Frame, input_buffer: &str) {
+fn draw_input_new_folder(frame: &mut Frame, input_buffer: &str, cursor_idx: usize) {
     let size = frame.size();
     let area = centered_rect(50, 25, size);
     frame.render_widget(Clear, area);
 
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
     let text = vec![
         Line::from(crate::lang::translate("exp_new_folder_prompt")),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                input_buffer,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(spans),
     ];
 
     let block = Block::default()
@@ -756,21 +755,18 @@ fn draw_confirm_fallback_popup(frame: &mut Frame, title: &str, options: &[String
     frame.render_widget(list, chunks[1]);
 }
 
-fn draw_input_rename(frame: &mut Frame, old_name: &str, input_buffer: &str) {
+fn draw_input_rename(frame: &mut Frame, old_name: &str, input_buffer: &str, cursor_idx: usize) {
     let size = frame.size();
     let area = centered_rect(50, 25, size);
     frame.render_widget(Clear, area);
 
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
     let text = vec![
         Line::from(format!("Tên cũ: {}", old_name)),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                input_buffer,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(spans),
     ];
 
     let block = Block::default()
@@ -920,27 +916,38 @@ fn draw_cryptdecode_form(
     encrypted_input: &str,
     is_remote_focused: bool,
     output_result: Option<&str>,
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(65, 45, size);
     frame.render_widget(Clear, area);
 
+    let remote_spans = if is_remote_focused {
+        let mut spans = vec![Span::styled("1. Crypt Remote (e.g. mycrypt:): ", Style::default().fg(Color::Yellow))];
+        spans.extend(super::make_input_spans_with_cursor(remote_input, cursor_idx, Color::White, Color::Blue));
+        spans
+    } else {
+        vec![
+            Span::styled("1. Crypt Remote (e.g. mycrypt:): ", Style::default().fg(Color::DarkGray)),
+            Span::styled(remote_input, Style::default().fg(Color::White).bg(Color::DarkGray)),
+        ]
+    };
+
+    let encrypted_spans = if !is_remote_focused {
+        let mut spans = vec![Span::styled("2. Encrypted Filename/Path: ", Style::default().fg(Color::Yellow))];
+        spans.extend(super::make_input_spans_with_cursor(encrypted_input, cursor_idx, Color::White, Color::Blue));
+        spans
+    } else {
+        vec![
+            Span::styled("2. Encrypted Filename/Path: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(encrypted_input, Style::default().fg(Color::White).bg(Color::DarkGray)),
+        ]
+    };
+
     let text = vec![
-        Line::from(vec![
-            Span::styled("1. Crypt Remote (e.g. mycrypt:): ", Style::default().fg(if is_remote_focused { Color::Yellow } else { Color::DarkGray })),
-            Span::styled(
-                remote_input,
-                Style::default().fg(Color::White).bg(if is_remote_focused { Color::Blue } else { Color::DarkGray }),
-            ),
-        ]),
+        Line::from(remote_spans),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("2. Encrypted Filename/Path: ", Style::default().fg(if !is_remote_focused { Color::Yellow } else { Color::DarkGray })),
-            Span::styled(
-                encrypted_input,
-                Style::default().fg(Color::White).bg(if !is_remote_focused { Color::Blue } else { Color::DarkGray }),
-            ),
-        ]),
+        Line::from(encrypted_spans),
         Line::from(""),
         Line::from("------------------------------------------------------------------"),
         Line::from("Kết quả giải mã / Decrypted Output:"),
@@ -1049,21 +1056,18 @@ fn draw_decompress_path_input(frame: &mut Frame, _archive_path: &str, selected_i
     frame.render_widget(list, area);
 }
 
-fn draw_decompress_path_manual_input(frame: &mut Frame, _archive_path: &str, input_buffer: &str) {
+fn draw_decompress_path_manual_input(frame: &mut Frame, _archive_path: &str, input_buffer: &str, cursor_idx: usize) {
     let size = frame.size();
     let area = centered_rect(60, 25, size);
     frame.render_widget(Clear, area);
 
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
     let text = vec![
         Line::from(crate::lang::translate("exp_archive_manual_prompt")),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                input_buffer,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(spans),
         Line::from(""),
         Line::from("[Enter] Xác nhận | [Esc] Hủy bỏ"),
     ];
@@ -1166,21 +1170,18 @@ fn draw_tui_explorer_selector(
     frame.render_widget(Paragraph::new(footer_text).style(Style::default().fg(Color::Yellow)), chunks[1]);
 }
 
-fn draw_input_paste_rename(frame: &mut Frame, input_buffer: &str) {
+fn draw_input_paste_rename(frame: &mut Frame, input_buffer: &str, cursor_idx: usize) {
     let size = frame.size();
     let area = centered_rect(50, 25, size);
     frame.render_widget(Clear, area);
 
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
     let text = vec![
         Line::from(crate::lang::translate("exp_paste_rename_prompt")),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                input_buffer,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(spans),
         Line::from(""),
         Line::from("[Enter] Xác nhận & Dán | [Esc] Hủy bỏ"),
     ];

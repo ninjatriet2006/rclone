@@ -5,8 +5,8 @@ Tệp này được thiết lập để bao quát toàn bộ kiến trúc tính 
 ---
 
 ## 1. Kiến Trúc Tương Tác (Integration Architecture)
-* **Phương thức liên kết**: `rclone-tui` liên kết tĩnh với thư viện Core Go thông qua `librclone.a` (nằm ở thư mục gốc `/home/bimatkeo/Rclone_Clone`).
-* **Kênh giao tiếp**: Mã nguồn Rust gọi FFI qua hàm `RcloneRPC(method, input_json)` trong [rclone.rs](file:///home/bimatkeo/Rclone_Clone/rclone/rclone-tui/src/rclone.rs).
+* **Phương thức liên kết**: `rclone-tui` liên kết tĩnh với thư viện Core Go thông qua `librclone.a` (nằm ở thư mục gốc `/home/bimatkeo/Documents/Rclone_Clone`).
+* **Kênh giao tiếp**: Mã nguồn Rust gọi FFI qua hàm `RcloneRPC(method, input_json)` trong [rclone.rs](file:///home/bimatkeo/Documents/Rclone_Clone/rclone/rclone-tui/src/rclone.rs).
 * **Kết quả**: Tất cả các cải tiến, sửa lỗi ở tầng Backend và Giao thức Core Go của Rclone đều **tự động được áp dụng** cho `rclone-tui` mà không cần sửa đổi mã Rust.
 
 ---

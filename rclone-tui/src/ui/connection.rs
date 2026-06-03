@@ -77,6 +77,7 @@ pub struct ConnectionState {
     pub error_message: Option<String>,
     pub info_message: Option<String>,
     pub remote_statuses: std::collections::HashMap<String, String>,
+    pub edit_cursor_idx: usize,
 }
 
 impl ConnectionState {
@@ -88,6 +89,7 @@ impl ConnectionState {
             error_message: None,
             info_message: None,
             remote_statuses: std::collections::HashMap::new(),
+            edit_cursor_idx: 0,
         }
     }
 
@@ -247,6 +249,7 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect) {
                 *is_editing,
                 input_buffer,
                 *active_tab,
+                state.edit_cursor_idx,
             );
         }
         WizardState::EditSetup {
@@ -273,6 +276,7 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect) {
                 *adding_new_key,
                 new_key_buffer,
                 *active_tab,
+                state.edit_cursor_idx,
             );
         }
         WizardState::ShowFeatures {
@@ -584,6 +588,7 @@ fn draw_advanced_setup_wizard(
     is_editing: bool,
     input_buffer: &str,
     active_tab: usize,
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(65, 75, size);
@@ -691,21 +696,35 @@ fn draw_advanced_setup_wizard(
                     Color::Black
                 };
 
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(cursor, Style::default().fg(Color::Red)),
                     Span::styled(
                         format!("{}: ", friendly_name),
                         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(display_val, Style::default().fg(fg).bg(bg)),
-                    Span::raw(format!(" - ({})", friendly_desc)),
-                ])
+                ];
+                if is_editing {
+                    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, fg, bg));
+                    if !choices_str.is_empty() {
+                        spans.push(Span::styled(choices_str, Style::default().fg(fg).bg(bg)));
+                    }
+                } else {
+                    spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
+                }
+                spans.push(Span::raw(format!(" - ({})", friendly_desc)));
+                Line::from(spans)
             } else {
+                let is_required = name == "_remote_name";
+                let label_style = if is_required {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
                 Line::from(vec![
                     Span::raw("    "),
                     Span::styled(
                         format!("{}: ", friendly_name),
-                        Style::default().fg(Color::Cyan),
+                        label_style,
                     ),
                     Span::raw(display_val),
                     Span::raw(format!(" - ({})", friendly_desc)),
@@ -799,6 +818,7 @@ fn draw_edit_setup_wizard(
     _adding_new_key: bool,
     _new_key_buffer: &str,
     active_tab: usize,
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(65, 75, size);
@@ -906,21 +926,35 @@ fn draw_edit_setup_wizard(
                     Color::Black
                 };
 
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(cursor, Style::default().fg(Color::Red)),
                     Span::styled(
                         format!("{}: ", friendly_name),
                         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(display_val, Style::default().fg(fg).bg(bg)),
-                    Span::raw(format!(" - ({})", friendly_desc)),
-                ])
+                ];
+                if is_editing {
+                    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, fg, bg));
+                    if !choices_str.is_empty() {
+                        spans.push(Span::styled(choices_str, Style::default().fg(fg).bg(bg)));
+                    }
+                } else {
+                    spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
+                }
+                spans.push(Span::raw(format!(" - ({})", friendly_desc)));
+                Line::from(spans)
             } else {
+                let is_required = name == "_remote_name";
+                let label_style = if is_required {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                };
                 Line::from(vec![
                     Span::raw("    "),
                     Span::styled(
                         format!("{}: ", friendly_name),
-                        Style::default().fg(Color::Cyan),
+                        label_style,
                     ),
                     Span::raw(display_val),
                     Span::raw(format!(" - ({})", friendly_desc)),

@@ -637,6 +637,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
+ "unicode-width",
  "webbrowser",
  "which",
 ]

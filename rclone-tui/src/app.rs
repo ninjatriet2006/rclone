@@ -40,6 +40,79 @@ pub fn get_job_description(job_id: i64) -> Option<String> {
     }
 }
 
+fn handle_input_key(
+    key: &crossterm::event::KeyEvent,
+    input_buffer: &mut String,
+    edit_cursor_idx: &mut usize,
+) -> bool {
+    use crossterm::event::KeyCode;
+    
+    let chars: Vec<char> = input_buffer.chars().collect();
+    let char_count = chars.len();
+    
+    if *edit_cursor_idx > char_count {
+        *edit_cursor_idx = char_count;
+    }
+
+    match key.code {
+        KeyCode::Left => {
+            if *edit_cursor_idx > 0 {
+                *edit_cursor_idx -= 1;
+            }
+            true
+        }
+        KeyCode::Right => {
+            if *edit_cursor_idx < char_count {
+                *edit_cursor_idx += 1;
+            }
+            true
+        }
+        KeyCode::Home => {
+            *edit_cursor_idx = 0;
+            true
+        }
+        KeyCode::End => {
+            *edit_cursor_idx = char_count;
+            true
+        }
+        KeyCode::Backspace => {
+            if *edit_cursor_idx > 0 {
+                let mut new_chars = Vec::with_capacity(char_count.saturating_sub(1));
+                new_chars.extend_from_slice(&chars[0..*edit_cursor_idx - 1]);
+                new_chars.extend_from_slice(&chars[*edit_cursor_idx..]);
+                *input_buffer = new_chars.into_iter().collect();
+                *edit_cursor_idx -= 1;
+            }
+            true
+        }
+        KeyCode::Delete => {
+            if *edit_cursor_idx < char_count {
+                let mut new_chars = Vec::with_capacity(char_count.saturating_sub(1));
+                new_chars.extend_from_slice(&chars[0..*edit_cursor_idx]);
+                new_chars.extend_from_slice(&chars[*edit_cursor_idx + 1..]);
+                *input_buffer = new_chars.into_iter().collect();
+            }
+            true
+        }
+        KeyCode::Char(c) => {
+            let has_modifiers = key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) 
+                || key.modifiers.contains(crossterm::event::KeyModifiers::ALT);
+            if !has_modifiers {
+                let mut new_chars = Vec::with_capacity(char_count + 1);
+                new_chars.extend_from_slice(&chars[0..*edit_cursor_idx]);
+                new_chars.push(c);
+                new_chars.extend_from_slice(&chars[*edit_cursor_idx..]);
+                *input_buffer = new_chars.into_iter().collect();
+                *edit_cursor_idx += 1;
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
     MainMenu,
@@ -795,16 +868,46 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
         self.services_state.systemd_services.clear();
     }
 
-    fn parse_exec_start(&self, exec_start: &str) -> (String, String) {
+    fn parse_exec_start_full(
+        &self,
+        exec_start: &str,
+    ) -> (String, String, std::collections::HashMap<String, String>) {
         let words: Vec<&str> = exec_start.split_whitespace().collect();
+        let mut remote = String::new();
+        let mut mount_path = String::new();
+        let mut flags = std::collections::HashMap::new();
+        
         if let Some(mount_pos) = words.iter().position(|&w| w == "mount") {
-            if mount_pos + 2 < words.len() {
-                let remote = words[mount_pos + 1].to_string();
-                let path = words[mount_pos + 2].to_string();
-                return (remote, path);
+            let mut non_flags = Vec::new();
+            let mut i = mount_pos + 1;
+            while i < words.len() {
+                let w = words[i];
+                if w.starts_with("--") {
+                    if let Some(eq_pos) = w.find('=') {
+                        let key = w[..eq_pos].to_string();
+                        let val = w[eq_pos + 1..].to_string();
+                        flags.insert(key, val);
+                    } else {
+                        if i + 1 < words.len() && !words[i + 1].starts_with("--") {
+                            flags.insert(w.to_string(), words[i + 1].to_string());
+                            i += 1;
+                        } else {
+                            flags.insert(w.to_string(), "true".to_string());
+                        }
+                    }
+                } else {
+                    non_flags.push(w.to_string());
+                }
+                i += 1;
+            }
+            if non_flags.len() >= 2 {
+                remote = non_flags[0].clone();
+                mount_path = non_flags[1].clone();
+            } else if non_flags.len() == 1 {
+                mount_path = non_flags[0].clone();
             }
         }
-        (String::new(), String::new())
+        (remote, mount_path, flags)
     }
 
     fn parse_systemd_file(&self, file_path: &str) -> std::io::Result<Vec<(String, String)>> {
@@ -883,7 +986,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             .map(|(_, v)| v.clone())
             .unwrap_or_default();
 
-        let (remote, mount_path) = self.parse_exec_start(&exec_start);
+        let (remote, mount_path, parsed_flags) = self.parse_exec_start_full(&exec_start);
 
         fields.push((
             "_service_name".to_string(),
@@ -920,6 +1023,80 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             "Tài khoản chạy".to_string(),
             user,
             Vec::new(),
+        ));
+
+        let get_flag = |key: &str| parsed_flags.get(key).cloned().unwrap_or_default();
+        fields.push((
+            "_flag_vfs_cache_mode".to_string(),
+            "Chế độ Cache VFS".to_string(),
+            get_flag("--vfs-cache-mode"),
+            vec!["".to_string(), "off".to_string(), "minimal".to_string(), "writes".to_string(), "full".to_string()],
+        ));
+        fields.push((
+            "_flag_vfs_cache_max_size".to_string(),
+            "Dung lượng Cache tối đa".to_string(),
+            get_flag("--vfs-cache-max-size"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_cache_max_age".to_string(),
+            "Thời gian Cache tối đa".to_string(),
+            get_flag("--vfs-cache-max-age"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_read_chunk_size".to_string(),
+            "Kích thước đoạn đọc".to_string(),
+            get_flag("--vfs-read-chunk-size"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_read_chunk_size_limit".to_string(),
+            "Giới hạn đoạn đọc".to_string(),
+            get_flag("--vfs-read-chunk-size-limit"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_dir_cache_time".to_string(),
+            "Thời gian Cache thư mục".to_string(),
+            get_flag("--dir-cache-time"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_attr_timeout".to_string(),
+            "Timeout thuộc tính".to_string(),
+            get_flag("--attr-timeout"),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_buffer_size".to_string(),
+            "Kích thước buffer RAM".to_string(),
+            get_flag("--buffer-size"),
+            Vec::new(),
+        ));
+        
+        let allow_other_val = if parsed_flags.contains_key("--allow-other") { "Có (yes)".to_string() } else { "".to_string() };
+        fields.push((
+            "_flag_allow_other".to_string(),
+            "Cho phép User khác".to_string(),
+            allow_other_val,
+            vec!["".to_string(), "Có (yes)".to_string()],
+        ));
+
+        let read_only_val = if parsed_flags.contains_key("--read-only") { "Có (yes)".to_string() } else { "".to_string() };
+        fields.push((
+            "_flag_read_only".to_string(),
+            "Chế độ chỉ đọc".to_string(),
+            read_only_val,
+            vec!["".to_string(), "Có (yes)".to_string()],
+        ));
+
+        let allow_non_empty_val = if parsed_flags.contains_key("--allow-non-empty") { "Có (yes)".to_string() } else { "".to_string() };
+        fields.push((
+            "_flag_allow_non_empty".to_string(),
+            "Cho phép thư mục chứa file".to_string(),
+            allow_non_empty_val,
+            vec!["".to_string(), "Có (yes)".to_string()],
         ));
 
         for (k, v) in raw_fields {
@@ -976,6 +1153,74 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             "Tài khoản chạy".to_string(),
             user,
             Vec::new(),
+        ));
+
+        // Rclone cờ ảo mặc định khi tạo mới
+        fields.push((
+            "_flag_vfs_cache_mode".to_string(),
+            "Chế độ Cache VFS".to_string(),
+            "full".to_string(),
+            vec!["".to_string(), "off".to_string(), "minimal".to_string(), "writes".to_string(), "full".to_string()],
+        ));
+        fields.push((
+            "_flag_vfs_cache_max_size".to_string(),
+            "Dung lượng Cache tối đa".to_string(),
+            "10G".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_cache_max_age".to_string(),
+            "Thời gian Cache tối đa".to_string(),
+            "72h".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_read_chunk_size".to_string(),
+            "Kích thước đoạn đọc".to_string(),
+            "32M".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_vfs_read_chunk_size_limit".to_string(),
+            "Giới hạn đoạn đọc".to_string(),
+            "off".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_dir_cache_time".to_string(),
+            "Thời gian Cache thư mục".to_string(),
+            "72h".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_attr_timeout".to_string(),
+            "Timeout thuộc tính".to_string(),
+            "72h".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_buffer_size".to_string(),
+            "Kích thước buffer RAM".to_string(),
+            "64M".to_string(),
+            Vec::new(),
+        ));
+        fields.push((
+            "_flag_allow_other".to_string(),
+            "Cho phép User khác".to_string(),
+            "".to_string(),
+            vec!["".to_string(), "Có (yes)".to_string()],
+        ));
+        fields.push((
+            "_flag_read_only".to_string(),
+            "Chế độ chỉ đọc".to_string(),
+            "".to_string(),
+            vec!["".to_string(), "Có (yes)".to_string()],
+        ));
+        fields.push((
+            "_flag_allow_non_empty".to_string(),
+            "Cho phép thư mục chứa file".to_string(),
+            "Có (yes)".to_string(),
+            vec!["".to_string(), "Có (yes)".to_string()],
         ));
 
         fields.push(("[Unit]Description".to_string(), String::new(), "Rclone Mount Service".to_string(), Vec::new()));
@@ -1083,10 +1328,55 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
 
             let config_path = self.config.get_active_profile_path();
 
-            let exec_start = format!(
-                "/usr/bin/rclone mount {} {} --config {} --vfs-cache-mode full --vfs-cache-max-age 72h --vfs-cache-max-size 10G --vfs-read-chunk-size 32M --vfs-read-chunk-size-limit off --dir-cache-time 72h --attr-timeout 72h --buffer-size 64M --allow-non-empty",
+            let mut exec_start = format!(
+                "/usr/bin/rclone mount {} {} --config {}",
                 remote, mount_path, config_path
             );
+            
+            let vfs_cache_mode = get_val("_flag_vfs_cache_mode");
+            if !vfs_cache_mode.is_empty() {
+                exec_start.push_str(&format!(" --vfs-cache-mode {}", vfs_cache_mode));
+            }
+            let vfs_cache_max_size = get_val("_flag_vfs_cache_max_size");
+            if !vfs_cache_max_size.is_empty() {
+                exec_start.push_str(&format!(" --vfs-cache-max-size {}", vfs_cache_max_size));
+            }
+            let vfs_cache_max_age = get_val("_flag_vfs_cache_max_age");
+            if !vfs_cache_max_age.is_empty() {
+                exec_start.push_str(&format!(" --vfs-cache-max-age {}", vfs_cache_max_age));
+            }
+            let vfs_read_chunk_size = get_val("_flag_vfs_read_chunk_size");
+            if !vfs_read_chunk_size.is_empty() {
+                exec_start.push_str(&format!(" --vfs-read-chunk-size {}", vfs_read_chunk_size));
+            }
+            let vfs_read_chunk_size_limit = get_val("_flag_vfs_read_chunk_size_limit");
+            if !vfs_read_chunk_size_limit.is_empty() {
+                exec_start.push_str(&format!(" --vfs-read-chunk-size-limit {}", vfs_read_chunk_size_limit));
+            }
+            let dir_cache_time = get_val("_flag_dir_cache_time");
+            if !dir_cache_time.is_empty() {
+                exec_start.push_str(&format!(" --dir-cache-time {}", dir_cache_time));
+            }
+            let attr_timeout = get_val("_flag_attr_timeout");
+            if !attr_timeout.is_empty() {
+                exec_start.push_str(&format!(" --attr-timeout {}", attr_timeout));
+            }
+            let buffer_size = get_val("_flag_buffer_size");
+            if !buffer_size.is_empty() {
+                exec_start.push_str(&format!(" --buffer-size {}", buffer_size));
+            }
+            let allow_other = get_val("_flag_allow_other");
+            if !allow_other.is_empty() {
+                exec_start.push_str(" --allow-other");
+            }
+            let read_only = get_val("_flag_read_only");
+            if !read_only.is_empty() {
+                exec_start.push_str(" --read-only");
+            }
+            let allow_non_empty = get_val("_flag_allow_non_empty");
+            if !allow_non_empty.is_empty() {
+                exec_start.push_str(" --allow-non-empty");
+            }
             let exec_stop = format!("/bin/fusermount -uz {}", mount_path);
 
             let mut update_raw = |key: &str, val: &str| {
@@ -4817,73 +5107,60 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     active_tab,
                                 };
                         } else {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    is_editing = false;
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::AdvancedSetup {
-                                            provider,
-                                            remote_name,
-                                            fields,
-                                            selected_field_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            selected_providers,
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Char(c) => {
-                                    input_buffer.push(c);
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::AdvancedSetup {
-                                            provider,
-                                            remote_name,
-                                            fields,
-                                            selected_field_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            selected_providers,
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Backspace => {
-                                    input_buffer.pop();
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::AdvancedSetup {
-                                            provider,
-                                            remote_name,
-                                            fields,
-                                            selected_field_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            selected_providers,
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Enter => {
-                                    if let Some(f) = filtered_fields.get(selected_field_idx) {
-                                        if let Some(real_idx) = fields.iter().position(|real_f| real_f.0 == f.0) {
-                                            fields[real_idx].2 = input_buffer.clone();
-                                        }
+                            let mut cursor = self.connection_state.edit_cursor_idx;
+                            if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                                self.connection_state.edit_cursor_idx = cursor;
+                                self.connection_state.wizard =
+                                    ui::connection::WizardState::AdvancedSetup {
+                                        provider,
+                                        remote_name,
+                                        fields,
+                                        selected_field_idx,
+                                        scroll_offset,
+                                        is_editing,
+                                        input_buffer,
+                                        selected_providers,
+                                        active_tab,
+                                    };
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        is_editing = false;
+                                        self.connection_state.wizard =
+                                            ui::connection::WizardState::AdvancedSetup {
+                                                provider,
+                                                remote_name,
+                                                fields,
+                                                selected_field_idx,
+                                                scroll_offset,
+                                                is_editing,
+                                                input_buffer,
+                                                selected_providers,
+                                                active_tab,
+                                            };
                                     }
-                                    is_editing = false;
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::AdvancedSetup {
-                                            provider,
-                                            remote_name,
-                                            fields,
-                                            selected_field_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            selected_providers,
-                                            active_tab,
-                                        };
+                                    KeyCode::Enter => {
+                                        if let Some(f) = filtered_fields.get(selected_field_idx) {
+                                            if let Some(real_idx) = fields.iter().position(|real_f| real_f.0 == f.0) {
+                                                fields[real_idx].2 = input_buffer.clone();
+                                            }
+                                        }
+                                        is_editing = false;
+                                        self.connection_state.wizard =
+                                            ui::connection::WizardState::AdvancedSetup {
+                                                provider,
+                                                remote_name,
+                                                fields,
+                                                selected_field_idx,
+                                                scroll_offset,
+                                                is_editing,
+                                                input_buffer,
+                                                selected_providers,
+                                                active_tab,
+                                            };
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -4966,6 +5243,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             if selected_field_idx < filtered_fields.len() {
                                 is_editing = true;
                                 input_buffer = filtered_fields[selected_field_idx].2.clone();
+                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
                                 self.connection_state.wizard =
                                     ui::connection::WizardState::AdvancedSetup {
                                         provider,
@@ -5163,77 +5441,62 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 active_tab,
                             };
                         } else {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    is_editing = false;
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::EditSetup {
-                                            remote_name,
-                                            provider,
-                                            fields,
-                                            selected_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            adding_new_key: false,
-                                            new_key_buffer: String::new(),
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Char(c) => {
-                                    input_buffer.push(c);
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::EditSetup {
-                                            remote_name,
-                                            provider,
-                                            fields,
-                                            selected_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            adding_new_key: false,
-                                            new_key_buffer: String::new(),
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Backspace => {
-                                    input_buffer.pop();
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::EditSetup {
-                                            remote_name,
-                                            provider,
-                                            fields,
-                                            selected_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            adding_new_key: false,
-                                            new_key_buffer: String::new(),
-                                            active_tab,
-                                        };
-                                }
-                                KeyCode::Enter => {
-                                    if let Some(f) = filtered_fields.get(selected_idx) {
-                                        if let Some(real_idx) = fields.iter().position(|real_f| real_f.0 == f.0) {
-                                            fields[real_idx].2 = input_buffer.clone();
-                                        }
+                            let mut cursor = self.connection_state.edit_cursor_idx;
+                            if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                                self.connection_state.edit_cursor_idx = cursor;
+                                self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                    remote_name,
+                                    provider,
+                                    fields,
+                                    selected_idx,
+                                    scroll_offset,
+                                    is_editing,
+                                    input_buffer,
+                                    adding_new_key: false,
+                                    new_key_buffer: String::new(),
+                                    active_tab,
+                                };
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        is_editing = false;
+                                        self.connection_state.wizard =
+                                            ui::connection::WizardState::EditSetup {
+                                                remote_name,
+                                                provider,
+                                                fields,
+                                                selected_idx,
+                                                scroll_offset,
+                                                is_editing,
+                                                input_buffer,
+                                                adding_new_key: false,
+                                                new_key_buffer: String::new(),
+                                                active_tab,
+                                            };
                                     }
-                                    is_editing = false;
-                                    self.connection_state.wizard =
-                                        ui::connection::WizardState::EditSetup {
-                                            remote_name,
-                                            provider,
-                                            fields,
-                                            selected_idx,
-                                            scroll_offset,
-                                            is_editing,
-                                            input_buffer,
-                                            adding_new_key: false,
-                                            new_key_buffer: String::new(),
-                                            active_tab,
-                                        };
+                                    KeyCode::Enter => {
+                                        if let Some(f) = filtered_fields.get(selected_idx) {
+                                            if let Some(real_idx) = fields.iter().position(|real_f| real_f.0 == f.0) {
+                                                fields[real_idx].2 = input_buffer.clone();
+                                            }
+                                        }
+                                        is_editing = false;
+                                        self.connection_state.wizard =
+                                            ui::connection::WizardState::EditSetup {
+                                                remote_name,
+                                                provider,
+                                                fields,
+                                                selected_idx,
+                                                scroll_offset,
+                                                is_editing,
+                                                input_buffer,
+                                                adding_new_key: false,
+                                                new_key_buffer: String::new(),
+                                                active_tab,
+                                            };
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -5317,6 +5580,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             if selected_idx < filtered_fields.len() {
                                 is_editing = true;
                                 input_buffer = filtered_fields[selected_idx].2.clone();
+                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
                                 self.connection_state.wizard =
                                     ui::connection::WizardState::EditSetup {
                                         remote_name,
@@ -5519,83 +5783,75 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     old_name,
                     mut input_buffer,
                     is_dir,
-                } => match key.code {
-                    KeyCode::Esc => {
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                    }
-                    KeyCode::Char(c) => {
-                        input_buffer.push(c);
+                } => {
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.explorer_state.edit_cursor_idx = cursor;
                         self.explorer_state.popup = ui::explorer::ExplorerPopup::InputRename {
                             old_name,
                             input_buffer,
                             is_dir,
                         };
-                    }
-                    KeyCode::Backspace => {
-                        input_buffer.pop();
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::InputRename {
-                            old_name,
-                            input_buffer,
-                            is_dir,
-                        };
-                    }
-                    KeyCode::Enter => {
-                        let new_name = input_buffer.trim().to_string();
-                        if !new_name.is_empty() && new_name != old_name {
-                            let pane = self.explorer_state.get_active_pane();
-                            let remote = pane.remote.clone();
-                            let parent_path = pane.path.clone();
-                            
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            }
+                            KeyCode::Enter => {
+                                let new_name = input_buffer.trim().to_string();
+                                if !new_name.is_empty() && new_name != old_name {
+                                    let pane = self.explorer_state.get_active_pane();
+                                    let remote = pane.remote.clone();
+                                    let parent_path = pane.path.clone();
+                                    
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
 
-                            let src = if remote.is_empty() {
-                                PathBuf::from(&parent_path).join(&old_name).to_string_lossy().to_string()
-                            } else {
-                                let clean_path = parent_path.trim_start_matches('/').trim_end_matches('/');
-                                if clean_path.is_empty() {
-                                    format!("{}:/{}", remote.trim_end_matches(':'), old_name)
+                                    let src = if remote.is_empty() {
+                                        PathBuf::from(&parent_path).join(&old_name).to_string_lossy().to_string()
+                                    } else {
+                                        let clean_path = parent_path.trim_start_matches('/').trim_end_matches('/');
+                                        if clean_path.is_empty() {
+                                            format!("{}:/{}", remote.trim_end_matches(':'), old_name)
+                                        } else {
+                                            format!("{}:/{}/{}", remote.trim_end_matches(':'), clean_path, old_name)
+                                        }
+                                    };
+
+                                    let dest = if remote.is_empty() {
+                                        PathBuf::from(&parent_path).join(&new_name).to_string_lossy().to_string()
+                                    } else {
+                                        let clean_path = parent_path.trim_start_matches('/').trim_end_matches('/');
+                                        if clean_path.is_empty() {
+                                            format!("{}:/{}", remote.trim_end_matches(':'), new_name)
+                                        } else {
+                                            format!("{}:/{}/{}", remote.trim_end_matches(':'), clean_path, new_name)
+                                        }
+                                    };
+
+                                    self.check_features_and_execute("rename", src, dest, is_dir, tx.clone());
                                 } else {
-                                    format!("{}:/{}/{}", remote.trim_end_matches(':'), clean_path, old_name)
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                                 }
-                            };
-
-                            let dest = if remote.is_empty() {
-                                PathBuf::from(&parent_path).join(&new_name).to_string_lossy().to_string()
-                            } else {
-                                let clean_path = parent_path.trim_start_matches('/').trim_end_matches('/');
-                                if clean_path.is_empty() {
-                                    format!("{}:/{}", remote.trim_end_matches(':'), new_name)
-                                } else {
-                                    format!("{}:/{}/{}", remote.trim_end_matches(':'), clean_path, new_name)
-                                }
-                            };
-
-                            self.check_features_and_execute("rename", src, dest, is_dir, tx.clone());
-                        } else {
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
                 }
 
                 ui::explorer::ExplorerPopup::InputNewFolder { mut input_buffer } => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                        }
-                        KeyCode::Char(c) => {
-                            input_buffer.push(c);
-                            self.explorer_state.popup =
-                                ui::explorer::ExplorerPopup::InputNewFolder { input_buffer };
-                        }
-                        KeyCode::Backspace => {
-                            input_buffer.pop();
-                            self.explorer_state.popup =
-                                ui::explorer::ExplorerPopup::InputNewFolder { input_buffer };
-                        }
-                        KeyCode::Enter => {
-                            let folder_name = input_buffer.trim().to_string();
-                            if !folder_name.is_empty() {
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.explorer_state.edit_cursor_idx = cursor;
+                        self.explorer_state.popup =
+                            ui::explorer::ExplorerPopup::InputNewFolder { input_buffer };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            }
+                            KeyCode::Enter => {
+                                let folder_name = input_buffer.trim().to_string();
+                                if !folder_name.is_empty() {
                                 let pane = self.explorer_state.get_active_pane_mut();
                                 let is_local = pane.remote.is_empty();
                                 let target = if is_local {
@@ -5678,6 +5934,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         _ => {}
                     }
                 }
+              }
                 ui::explorer::ExplorerPopup::SyncConfirm => {
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
@@ -5893,34 +6150,34 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
                 ui::explorer::ExplorerPopup::CryptdecodeForm { mut remote_input, mut encrypted_input, mut is_remote_focused, output_result } => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                        }
-                        KeyCode::Tab => {
-                            is_remote_focused = !is_remote_focused;
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result };
-                        }
-                        KeyCode::Char(c) => {
-                            if is_remote_focused {
-                                remote_input.push(c);
-                            } else {
-                                encrypted_input.push(c);
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    let handled = if is_remote_focused {
+                        handle_input_key(&key, &mut remote_input, &mut cursor)
+                    } else {
+                        handle_input_key(&key, &mut encrypted_input, &mut cursor)
+                    };
+                    if handled {
+                        self.explorer_state.edit_cursor_idx = cursor;
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                             }
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result };
-                        }
-                        KeyCode::Backspace => {
-                            if is_remote_focused {
-                                remote_input.pop();
-                            } else {
-                                encrypted_input.pop();
+                            KeyCode::Tab => {
+                                is_remote_focused = !is_remote_focused;
+                                self.explorer_state.edit_cursor_idx = if is_remote_focused {
+                                    remote_input.chars().count()
+                                } else {
+                                    encrypted_input.chars().count()
+                                };
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result };
                             }
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm { remote_input, encrypted_input, is_remote_focused, output_result };
+                            KeyCode::Enter => {
+                                self.execute_cryptdecode(remote_input.clone(), encrypted_input.clone(), tx.clone()).await;
+                            }
+                            _ => {}
                         }
-                        KeyCode::Enter => {
-                            self.execute_cryptdecode(remote_input.clone(), encrypted_input.clone(), tx.clone()).await;
-                        }
-                        _ => {}
                     }
                 }
                 ui::explorer::ExplorerPopup::DecompressModeSelect { archive_path, mut selected_idx } => {
@@ -5959,6 +6216,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 } else {
                                     format!("{}:{}", active_pane.remote.trim_end_matches(':'), active_pane.path)
                                 };
+                                self.explorer_state.edit_cursor_idx = initial_path.chars().count();
                                 self.explorer_state.popup = ui::explorer::ExplorerPopup::DecompressPathManualInput {
                                     archive_path,
                                     input_buffer: initial_path,
@@ -5980,25 +6238,23 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
                 ui::explorer::ExplorerPopup::DecompressPathManualInput { archive_path, mut input_buffer } => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                        }
-                        KeyCode::Char(c) => {
-                            input_buffer.push(c);
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::DecompressPathManualInput { archive_path, input_buffer };
-                        }
-                        KeyCode::Backspace => {
-                            input_buffer.pop();
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::DecompressPathManualInput { archive_path, input_buffer };
-                        }
-                        KeyCode::Enter => {
-                            let dest_path = input_buffer.trim().to_string();
-                            if !dest_path.is_empty() {
-                                self.execute_archive_decompress(archive_path, dest_path, tx.clone()).await;
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.explorer_state.edit_cursor_idx = cursor;
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::DecompressPathManualInput { archive_path, input_buffer };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                             }
+                            KeyCode::Enter => {
+                                let dest_path = input_buffer.trim().to_string();
+                                if !dest_path.is_empty() {
+                                    self.execute_archive_decompress(archive_path, dest_path, tx.clone()).await;
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
                 ui::explorer::ExplorerPopup::TuiExplorerSelector {
@@ -6136,48 +6392,46 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                 }
                 ui::explorer::ExplorerPopup::InputPasteRename { mut input_buffer } => {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                        }
-                        KeyCode::Char(c) => {
-                            input_buffer.push(c);
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::InputPasteRename { input_buffer };
-                        }
-                        KeyCode::Backspace => {
-                            input_buffer.pop();
-                            self.explorer_state.popup = ui::explorer::ExplorerPopup::InputPasteRename { input_buffer };
-                        }
-                        KeyCode::Enter => {
-                            let new_name = input_buffer.trim().to_string();
-                            if !new_name.is_empty() {
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.explorer_state.edit_cursor_idx = cursor;
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::InputPasteRename { input_buffer };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
                                 self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                                if let Some(ref clipboard_item) = self.explorer_state.clipboard {
-                                    let src = if clipboard_item.remote.is_empty() {
-                                        PathBuf::from(&clipboard_item.path)
-                                            .join(&clipboard_item.name)
-                                            .to_string_lossy()
-                                            .to_string()
-                                    } else {
-                                        format!("{}:{}/{}", clipboard_item.remote.trim_end_matches(':'), clipboard_item.path.trim_start_matches('/'), clipboard_item.name)
-                                    };
+                            }
+                            KeyCode::Enter => {
+                                let new_name = input_buffer.trim().to_string();
+                                if !new_name.is_empty() {
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                                    if let Some(ref clipboard_item) = self.explorer_state.clipboard {
+                                        let src = if clipboard_item.remote.is_empty() {
+                                            PathBuf::from(&clipboard_item.path)
+                                                .join(&clipboard_item.name)
+                                                .to_string_lossy()
+                                                .to_string()
+                                        } else {
+                                            format!("{}:{}/{}", clipboard_item.remote.trim_end_matches(':'), clipboard_item.path.trim_start_matches('/'), clipboard_item.name)
+                                        };
 
-                                    let dest_pane = self.explorer_state.get_active_pane();
-                                    let dest = if dest_pane.remote.is_empty() {
-                                        PathBuf::from(&dest_pane.path)
-                                            .join(&new_name)
-                                            .to_string_lossy()
-                                            .to_string()
-                                    } else {
-                                        format!("{}:{}/{}", dest_pane.remote.trim_end_matches(':'), dest_pane.path.trim_start_matches('/'), new_name)
-                                    };
+                                        let dest_pane = self.explorer_state.get_active_pane();
+                                        let dest = if dest_pane.remote.is_empty() {
+                                            PathBuf::from(&dest_pane.path)
+                                                .join(&new_name)
+                                                .to_string_lossy()
+                                                .to_string()
+                                        } else {
+                                            format!("{}:{}/{}", dest_pane.remote.trim_end_matches(':'), dest_pane.path.trim_start_matches('/'), new_name)
+                                        };
 
-                                    let is_dir = clipboard_item.is_dir;
-                                    self.check_features_and_execute("copy", src, dest, is_dir, tx.clone());
+                                        let is_dir = clipboard_item.is_dir;
+                                        self.check_features_and_execute("copy", src, dest, is_dir, tx.clone());
+                                    }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -6374,22 +6628,33 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 };
             }
             KeyCode::Char('n') | KeyCode::Char('N') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
+                self.explorer_state.edit_cursor_idx = 0;
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::InputNewFolder {
                     input_buffer: String::new(),
                 };
             }
             KeyCode::Char('y') | KeyCode::Char('Y') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                 // Ctrl+Y: Đổi tên tệp/thư mục
-                let pane = self.explorer_state.get_active_pane();
-                if !pane.items.is_empty() {
-                    let item = &pane.items[pane.selected_idx];
-                    if item.name != ".." {
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::InputRename {
-                            old_name: item.name.clone(),
-                            input_buffer: item.name.clone(),
-                            is_dir: item.is_dir,
-                        };
+                let (name, is_dir) = {
+                    let pane = self.explorer_state.get_active_pane();
+                    if !pane.items.is_empty() {
+                        let item = &pane.items[pane.selected_idx];
+                        if item.name != ".." {
+                            (Some(item.name.clone()), Some(item.is_dir))
+                        } else {
+                            (None, None)
+                        }
+                    } else {
+                        (None, None)
                     }
+                };
+                if let (Some(name), Some(is_dir)) = (name, is_dir) {
+                    self.explorer_state.edit_cursor_idx = name.chars().count();
+                    self.explorer_state.popup = ui::explorer::ExplorerPopup::InputRename {
+                        old_name: name.clone(),
+                        input_buffer: name,
+                        is_dir,
+                    };
                 }
             }
             KeyCode::Delete => {
@@ -6604,6 +6869,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         });
                     }
                 } else if let Some(ref clipboard_item) = self.explorer_state.clipboard {
+                    self.explorer_state.edit_cursor_idx = clipboard_item.name.chars().count();
                     self.explorer_state.popup = ui::explorer::ExplorerPopup::InputPasteRename {
                         input_buffer: clipboard_item.name.clone(),
                     };
@@ -7115,6 +7381,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     current_flag_idx: 0,
                                     input_buffer: String::new(),
                                     is_simple_terminal: false,
+                                    is_editing: false,
                                 };
                             } else if service_type == ui::services::ServiceType::Mount || service_type == ui::services::ServiceType::NfsMount {
                                 // Chọn chế độ Simple hay Advanced
@@ -7323,6 +7590,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             } else {
                                 String::new()
                             };
+                            self.services_state.edit_cursor_idx = default_path.chars().count();
                             self.services_state.wizard = ui::services::ServicesWizardState::InputPath {
                                 service_type,
                                 remote,
@@ -7340,29 +7608,21 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 mut input_buffer,
                 is_simple_terminal,
             } => {
-                match key.code {
-                    KeyCode::Esc => {
-                        self.services_state.wizard = ui::services::ServicesWizardState::None;
-                    }
-                    KeyCode::Char(c) => {
-                        input_buffer.push(c);
-                        self.services_state.wizard = ui::services::ServicesWizardState::InputPath {
-                            service_type,
-                            remote,
-                            input_buffer,
-                            is_simple_terminal,
-                        };
-                    }
-                    KeyCode::Backspace => {
-                        input_buffer.pop();
-                        self.services_state.wizard = ui::services::ServicesWizardState::InputPath {
-                            service_type,
-                            remote,
-                            input_buffer,
-                            is_simple_terminal,
-                        };
-                    }
-                    KeyCode::Enter => {
+                let mut cursor = self.services_state.edit_cursor_idx;
+                if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                    self.services_state.edit_cursor_idx = cursor;
+                    self.services_state.wizard = ui::services::ServicesWizardState::InputPath {
+                        service_type,
+                        remote,
+                        input_buffer,
+                        is_simple_terminal,
+                    };
+                } else {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.services_state.wizard = ui::services::ServicesWizardState::None;
+                        }
+                        KeyCode::Enter => {
                         let path = input_buffer.trim().to_string();
 
                         if service_type == ui::services::ServiceType::Mount || service_type == ui::services::ServiceType::NfsMount {
@@ -7404,6 +7664,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 current_flag_idx: 0,
                                 input_buffer: String::new(),
                                 is_simple_terminal,
+                                is_editing: false,
                             };
                         } else {
                             // Chia sẻ mạng: Chọn giao thức trước
@@ -7417,6 +7678,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                     _ => {}
                 }
+              }
             }
             ui::services::ServicesWizardState::GuiSelectPath {
                 service_type,
@@ -7632,6 +7894,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     current_flag_idx: 0,
                                     input_buffer: String::new(),
                                     is_simple_terminal: true,
+                                    is_editing: false,
                                 };
                             }
                         }
@@ -8020,6 +8283,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             current_flag_idx: 0,
                             input_buffer: String::new(),
                             is_simple_terminal: false,
+                            is_editing: false,
                         };
                     }
                     _ => {}
@@ -8034,64 +8298,119 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 mut current_flag_idx,
                 mut input_buffer,
                 is_simple_terminal,
+                is_editing,
             } => {
-                match key.code {
-                    KeyCode::Esc => {
-                        // Hủy bỏ tiến trình cài đặt dịch vụ (Bug 25, 55)
-                        self.services_state.wizard = ui::services::ServicesWizardState::None;
-                    }
-                    KeyCode::Char(c) => {
-                        input_buffer.push(c);
-                        self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
-                            service_type,
-                            remote,
-                            path,
-                            protocol,
-                            flags,
-                            current_flag_idx,
-                            input_buffer,
-                            is_simple_terminal,
-                        };
-                    }
-                    KeyCode::Backspace => {
-                        input_buffer.pop();
-                        self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
-                            service_type,
-                            remote,
-                            path,
-                            protocol,
-                            flags,
-                            current_flag_idx,
-                            input_buffer,
-                            is_simple_terminal,
-                        };
-                    }
-                    KeyCode::Enter => {
-                        // Ghi nhận giá trị người dùng nhập (nếu trống thì lấy mặc định)
-                        let val = input_buffer.trim().to_string();
-                        flags[current_flag_idx].3 = if val.is_empty() {
-                            flags[current_flag_idx].2.clone()
-                        } else {
-                            val
-                        };
+                let total_options = flags.len() + 2;
 
-                        if current_flag_idx + 1 < flags.len() {
-                            // Chuyển sang cờ tiếp theo
-                            current_flag_idx += 1;
-                            input_buffer = String::new();
-                            self.services_state.wizard =
-                                ui::services::ServicesWizardState::AskFlags {
+                if is_editing {
+                    let mut cursor = self.services_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.services_state.edit_cursor_idx = cursor;
+                        self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
+                            service_type,
+                            remote,
+                            path,
+                            protocol,
+                            flags,
+                            current_flag_idx,
+                            input_buffer,
+                            is_simple_terminal,
+                            is_editing: true,
+                        };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
                                     service_type,
                                     remote,
                                     path,
                                     protocol,
                                     flags,
                                     current_flag_idx,
-                                    input_buffer,
+                                    input_buffer: String::new(),
                                     is_simple_terminal,
+                                    is_editing: false,
                                 };
+                            }
+                            KeyCode::Enter => {
+                                flags[current_flag_idx].3 = input_buffer.trim().to_string();
+                                self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
+                                    service_type,
+                                    remote,
+                                    path,
+                                    protocol,
+                                    flags,
+                                    current_flag_idx,
+                                    input_buffer: String::new(),
+                                    is_simple_terminal,
+                                    is_editing: false,
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
+
+                match key.code {
+                    KeyCode::Esc => {
+                        self.services_state.wizard = ui::services::ServicesWizardState::None;
+                    }
+                    KeyCode::Up => {
+                        if current_flag_idx == 0 {
+                            current_flag_idx = total_options - 1;
                         } else {
-                            // Đã cấu hình xong tất cả các cờ, kích hoạt dịch vụ
+                            current_flag_idx -= 1;
+                        }
+                        self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
+                            service_type,
+                            remote,
+                            path,
+                            protocol,
+                            flags,
+                            current_flag_idx,
+                            input_buffer: String::new(),
+                            is_simple_terminal,
+                            is_editing: false,
+                        };
+                    }
+                    KeyCode::Down => {
+                        current_flag_idx = (current_flag_idx + 1) % total_options;
+                        self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
+                            service_type,
+                            remote,
+                            path,
+                            protocol,
+                            flags,
+                            current_flag_idx,
+                            input_buffer: String::new(),
+                            is_simple_terminal,
+                            is_editing: false,
+                        };
+                    }
+                    KeyCode::Enter => {
+                        if current_flag_idx < flags.len() {
+                            let val = flags[current_flag_idx].3.clone();
+                            self.services_state.edit_cursor_idx = val.chars().count();
+                            self.services_state.wizard = ui::services::ServicesWizardState::AskFlags {
+                                service_type,
+                                remote,
+                                path,
+                                protocol,
+                                flags,
+                                current_flag_idx,
+                                input_buffer: val,
+                                is_simple_terminal,
+                                is_editing: true,
+                            };
+                        } else if current_flag_idx == flags.len() {
+                            for item in flags.iter_mut() {
+                                if item.3.is_empty() {
+                                    if item.0 == "mount_point" || item.0 == "--addr" || item.0 == "--rc-addr" {
+                                        item.3 = item.2.clone();
+                                    }
+                                }
+                            }
                             self.execute_launch_service(
                                 service_type,
                                 remote,
@@ -8099,6 +8418,8 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 protocol,
                                 flags,
                             );
+                        } else {
+                            self.services_state.wizard = ui::services::ServicesWizardState::None;
                         }
                     }
                     _ => {}
@@ -8334,34 +8655,30 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing, input_buffer, active_tab, adding_new_key, new_key_buffer
                         };
                     } else {
-                        match key.code {
-                            KeyCode::Esc => {
-                                self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
-                                    service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Char(c) => {
-                                input_buffer.push(c);
-                                self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
-                                    service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Backspace => {
-                                input_buffer.pop();
-                                self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
-                                    service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Enter => {
-                                let field_to_update = filtered_fields[selected_idx].0.clone();
-                                if let Some(item) = fields.iter_mut().find(|(k, _, _, _)| k == &field_to_update) {
-                                    item.2 = input_buffer.clone();
+                        let mut cursor = self.services_state.edit_cursor_idx;
+                        if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                            self.services_state.edit_cursor_idx = cursor;
+                            self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
+                                service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
+                            };
+                        } else {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
+                                        service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
+                                    };
                                 }
-                                self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
-                                    service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
-                                };
+                                KeyCode::Enter => {
+                                    let field_to_update = filtered_fields[selected_idx].0.clone();
+                                    if let Some(item) = fields.iter_mut().find(|(k, _, _, _)| k == &field_to_update) {
+                                        item.2 = input_buffer.clone();
+                                    }
+                                    self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
+                                        service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
+                                    };
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     return;
@@ -8412,6 +8729,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
                                 };
                             } else {
+                                self.services_state.edit_cursor_idx = val.chars().count();
                                 self.services_state.wizard = ui::services::ServicesWizardState::EditSystemdService {
                                     service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: true, input_buffer: val, active_tab, adding_new_key, new_key_buffer
                                 };
@@ -8563,34 +8881,30 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             fields, selected_idx, scroll_offset, is_editing, input_buffer, active_tab, adding_new_key, new_key_buffer
                         };
                     } else {
-                        match key.code {
-                            KeyCode::Esc => {
-                                self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
-                                    fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Char(c) => {
-                                input_buffer.push(c);
-                                self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
-                                    fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Backspace => {
-                                input_buffer.pop();
-                                self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
-                                    fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
-                                };
-                            }
-                            KeyCode::Enter => {
-                                let field_to_update = filtered_fields[selected_idx].0.clone();
-                                if let Some(item) = fields.iter_mut().find(|(k, _, _, _)| k == &field_to_update) {
-                                    item.2 = input_buffer.clone();
+                        let mut cursor = self.services_state.edit_cursor_idx;
+                        if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                            self.services_state.edit_cursor_idx = cursor;
+                            self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
+                                fields, selected_idx, scroll_offset, is_editing: true, input_buffer, active_tab, adding_new_key, new_key_buffer
+                            };
+                        } else {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
+                                        fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
+                                    };
                                 }
-                                self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
-                                    fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
-                                };
+                                KeyCode::Enter => {
+                                    let field_to_update = filtered_fields[selected_idx].0.clone();
+                                    if let Some(item) = fields.iter_mut().find(|(k, _, _, _)| k == &field_to_update) {
+                                        item.2 = input_buffer.clone();
+                                    }
+                                    self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
+                                        fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
+                                    };
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     return;
@@ -8641,6 +8955,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
                                 };
                             } else {
+                                self.services_state.edit_cursor_idx = val.chars().count();
                                 self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
                                     fields, selected_idx, scroll_offset, is_editing: true, input_buffer: val, active_tab, adding_new_key, new_key_buffer
                                 };
@@ -9295,6 +9610,11 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     String::new()
                 };
                 let focus = initial_remote.is_empty();
+                self.explorer_state.edit_cursor_idx = if focus {
+                    initial_remote.chars().count()
+                } else {
+                    initial_encrypted.chars().count()
+                };
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::CryptdecodeForm {
                     remote_input: initial_remote,
                     encrypted_input: initial_encrypted,

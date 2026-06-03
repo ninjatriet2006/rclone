@@ -72,6 +72,7 @@ pub enum ServicesWizardState {
         current_flag_idx: usize,
         input_buffer: String,
         is_simple_terminal: bool,
+        is_editing: bool,
     },
     SelectSystemdAction {
         service_name: String,
@@ -136,7 +137,7 @@ pub struct ServicesState {
     pub info_message: Option<String>,
     pub all_remotes: Vec<String>,
     pub selecting_remote: Option<usize>,
-
+    pub edit_cursor_idx: usize,
 }
 
 impl ServicesState {
@@ -159,7 +160,7 @@ impl ServicesState {
             info_message: None,
             all_remotes: Vec::new(),
             selecting_remote: None,
-
+            edit_cursor_idx: 0,
         }
     }
 
@@ -480,7 +481,7 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
             input_buffer,
             ..
         } => {
-            draw_input_path(frame, service_type, remote, input_buffer);
+            draw_input_path(frame, service_type, remote, input_buffer, state.edit_cursor_idx);
         }
         ServicesWizardState::GuiSelectPath {
             service_type,
@@ -542,7 +543,8 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
             flags,
             current_flag_idx,
             input_buffer,
-            ..
+            is_simple_terminal: _,
+            is_editing,
         } => {
             draw_ask_flags(
                 frame,
@@ -553,6 +555,8 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
                 flags,
                 *current_flag_idx,
                 input_buffer,
+                *is_editing,
+                state.edit_cursor_idx,
             );
         }
         ServicesWizardState::SelectSystemdAction {
@@ -588,6 +592,7 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
                 new_key_buffer,
                 state.selecting_remote,
                 &state.all_remotes,
+                state.edit_cursor_idx,
             );
         }
         ServicesWizardState::CreateSystemdService {
@@ -614,6 +619,7 @@ pub fn draw(state: &ServicesState, frame: &mut Frame, area: Rect) {
                 new_key_buffer,
                 state.selecting_remote,
                 &state.all_remotes,
+                state.edit_cursor_idx,
             );
         }
         ServicesWizardState::None => {}
@@ -699,6 +705,7 @@ fn draw_input_path(
     service_type: &ServiceType,
     remote: &str,
     input_buffer: &str,
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(60, 30, size);
@@ -713,6 +720,11 @@ fn draw_input_path(
     };
 
     let local_system_label = crate::lang::translate("srv_local_system");
+    let mut spans = vec![
+        Span::styled("> ", Style::default().fg(Color::Magenta)),
+    ];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
     let text = vec![
         Line::from(vec![
             Span::raw(crate::lang::translate("srv_selected_source")),
@@ -729,13 +741,7 @@ fn draw_input_path(
         ]),
         Line::from(""),
         Line::from(prompt),
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Magenta)),
-            Span::styled(
-                input_buffer,
-                Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
+        Line::from(spans),
     ];
 
     let block = Block::default()
@@ -812,6 +818,8 @@ fn draw_ask_flags(
     flags: &[(String, String, String, String)],
     current_flag_idx: usize,
     input_buffer: &str,
+    is_editing: bool,
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(65, 45, size);
@@ -844,21 +852,7 @@ fn draw_ask_flags(
         .replacen("{}", &format!("{}", current_flag_idx + 1), 1)
         .replacen("{}", &format!("{}", flags.len()), 1);
 
-    let text = vec![
-        Line::from(info_spans),
-        Line::from(progress_text),
-        Line::from("------------------------------------------------------------------"),
-        Line::from(""),
-        Line::from(Span::styled(
-            crate::lang::translate("srv_wizard_flag").replace("{}", flag_name),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(question.as_str()),
-        Line::from(""),
-        Line::from(vec![
+        let mut input_spans = vec![
             Span::raw(crate::lang::translate("srv_wizard_input_prompt")),
             Span::styled(
                 default_val,
@@ -867,12 +861,32 @@ fn draw_ask_flags(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("]): "),
-            Span::styled(
+        ];
+        if is_editing {
+            input_spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+        } else {
+            input_spans.push(Span::styled(
                 input_buffer,
                 Style::default().fg(Color::White).bg(Color::DarkGray),
-            ),
-        ]),
-    ];
+            ));
+        }
+
+        let text = vec![
+            Line::from(info_spans),
+            Line::from(progress_text),
+            Line::from("------------------------------------------------------------------"),
+            Line::from(""),
+            Line::from(Span::styled(
+                crate::lang::translate("srv_wizard_flag").replace("{}", flag_name),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(question.as_str()),
+            Line::from(""),
+            Line::from(input_spans),
+        ];
 
     let block = Block::default()
         .title(Span::styled(
@@ -1160,6 +1174,7 @@ fn draw_edit_systemd_service_wizard(
     new_key_buffer: &str,
     _selecting_remote: Option<usize>,
     _remotes: &[String],
+    cursor_idx: usize,
 ) {
     let size = frame.size();
     let area = centered_rect(65, 75, size);
@@ -1274,8 +1289,12 @@ fn draw_edit_systemd_service_wizard(
                         format!("{}: ", friendly_name),
                         Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(display_val, Style::default().fg(fg).bg(bg)),
                 ];
+                if is_editing {
+                    spans.extend(super::make_input_spans_with_cursor(&display_val, cursor_idx, fg, bg));
+                } else {
+                    spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
+                }
                 if name == "_remote" || name == "_mount_path" {
                     spans.push(Span::styled(
                         crate::lang::translate("srv_insert_gui_hint"),

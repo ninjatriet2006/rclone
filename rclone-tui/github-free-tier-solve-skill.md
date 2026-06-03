@@ -137,6 +137,6 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
 
 ## 4. Giao Thức Tự Tiến Hóa & Cập Nhật Skill (Self-Evolution Protocol)
 
-Tệp tài liệu kỹ năng này tuân thủ giao thức tự tiến hóa chung của dự án. Quy trình cập nhật bài học kinh nghiệm và đồng bộ hóa tri thức giữa các phiên làm việc được thực hiện theo quy chuẩn tại [self-evolution-skill.md](file:///home/bimatkeo/Rclone_Clone/rclone/rclone-tui/self-evolution-skill.md).
+Tệp tài liệu kỹ năng này tuân thủ giao thức tự tiến hóa chung của dự án. Quy trình cập nhật bài học kinh nghiệm và đồng bộ hóa tri thức giữa các phiên làm việc được thực hiện theo quy chuẩn tại [self-evolution-skill.md](file:///home/bimatkeo/Documents/Rclone_Clone/rclone/rclone-tui/self-evolution-skill.md).
 
 

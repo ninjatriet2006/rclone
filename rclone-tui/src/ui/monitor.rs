@@ -182,7 +182,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                             super::format_size(job.bytes),
                             super::format_size(job.size)
                         ),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(Color::Black),
                     ));
                 }
 
@@ -220,7 +220,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                             super::format_size(job.bytes),
                             super::format_size(job.size)
                         ),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(Color::Black),
                     ),
                     Span::styled(
                         format!("{} - ", eta_str),
@@ -262,7 +262,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
 
     let details_text = if state.active_jobs.is_empty() {
         vec![Line::from(vec![
-            Span::styled("[DEBUG] Không có tác vụ rclone nào đang chạy.", Style::default().fg(Color::Gray)),
+            Span::styled("[DEBUG] Không có tác vụ rclone nào đang chạy.", Style::default().fg(Color::Black)),
         ])]
     } else if state.selected_job_idx < state.active_jobs.len() {
         let job = &state.active_jobs[state.selected_job_idx];
@@ -277,7 +277,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                         .map(|id| id.to_string())
                         .unwrap_or_else(|| "Không có".to_string())
                 ),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::Black),
             ),
         ]));
 
@@ -288,7 +288,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                         "[DEBUG] Nhóm thống kê: {} | Bắt đầu: {} | Đã chạy: {:.1}s",
                         job.group, job.start_time, job.duration
                     ),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(Color::Black),
                 ),
             ]));
         }
@@ -302,7 +302,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                     super::format_size(job.bytes),
                     super::format_size(job.size)
                 ),
-                Style::default().fg(Color::Green),
+                Style::default().fg(Color::Black),
             ),
         ]));
 
@@ -310,7 +310,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("[DEBUG] Lệnh/Mô tả đầy đủ: {}", job.description),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(Color::Black),
                 ),
             ]));
         }
@@ -318,7 +318,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
         lines
     } else {
         vec![Line::from(vec![
-            Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Gray)),
+            Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Black)),
         ])]
     };
 
