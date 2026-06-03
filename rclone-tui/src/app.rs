@@ -191,6 +191,16 @@ pub enum AppEvent {
     CryptdecodeResult {
         result: Result<String, String>,
     },
+    PermissionErrorDetected {
+        src: String,
+        dest: String,
+        is_dir: bool,
+    },
+    PermissionCheckPassed {
+        src: String,
+        dest: String,
+        is_dir: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,6 +233,7 @@ pub struct App {
     // Status checker trigger
     pub status_trigger_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     pub remote_dependencies: std::collections::HashMap<String, String>,
+    pub remote_types: std::collections::HashMap<String, String>,
     pub features_cache: std::collections::HashMap<String, serde_json::Value>,
     pub last_services_scan: std::time::Instant,
     pub last_stats_scan: std::time::Instant,
@@ -264,6 +275,7 @@ impl App {
             selected_lang_idx,
             status_trigger_tx: None,
             remote_dependencies: std::collections::HashMap::new(),
+            remote_types: std::collections::HashMap::new(),
             features_cache,
             last_services_scan: std::time::Instant::now(),
             last_stats_scan: std::time::Instant::now(),
@@ -1602,8 +1614,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     self.connection_state.remotes = remotes.clone();
                     self.services_state.all_remotes = remotes.clone();
 
-                    // Cập nhật remote_dependencies từ config/dump
+                    // Cập nhật remote_dependencies và remote_types từ config/dump
                     self.remote_dependencies.clear();
+                    self.remote_types.clear();
                     let dump_res = rclone::rpc_async("config/dump".to_string(), "{}".to_string()).await;
                     if let Ok(rpc_dump) = dump_res {
                         if let Ok(dump_val) = serde_json::from_str::<Value>(&rpc_dump.output) {
@@ -1611,6 +1624,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 for (name, details) in obj {
                                     if let Some(details_obj) = details.as_object() {
                                         if let Some(r_type) = details_obj.get("type").and_then(|t| t.as_str()) {
+                                            self.remote_types.insert(name.clone(), r_type.to_string());
                                             if r_type == "crypt" || r_type == "alias" {
                                                 if let Some(base_remote_path) = details_obj.get("remote").and_then(|r| r.as_str()) {
                                                     let base_name = if let Some(idx) = base_remote_path.find(':') {
@@ -2354,30 +2368,90 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             }
         } else if action_type == "copy" {
             if dst_copy {
-                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
-                    src: src.clone(),
-                    dest: dest.clone(),
-                    pct: 0.0,
-                    job_id: None,
-                };
-                let tx_copy = tx.clone();
+                let tx_check = tx.clone();
                 let src_clone = src.clone();
                 let dest_clone = dest.clone();
+                let is_dir_clone = is_dir;
                 tokio::spawn(async move {
-                    let res = run_rpc_job_async_with_progress(
-                        "sync/copy".to_string(),
-                        json!({
-                            "srcFs": src_clone,
-                            "dstFs": dest_clone,
-                        }),
-                        Some((src_clone, dest_clone, true)),
-                        Some(tx_copy.clone()),
-                    ).await;
-                    let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
-                        pane: ui::explorer::ActivePane::Left,
-                        op_name: "sao chép (copy)".to_string(),
-                        result: res,
-                    });
+                    let test_file = if is_dir_clone {
+                        let list_param = json!({
+                            "fs": src_clone,
+                            "remote": "",
+                        }).to_string();
+                        if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                            if res.status == 200 {
+                                if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
+                                    if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                                        list_arr.iter()
+                                            .find(|item| item.get("IsDir").and_then(|d| d.as_bool()) == Some(false))
+                                            .and_then(|item| item.get("Name").and_then(|n| n.as_str()).map(|n| n.to_string()))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        let (_, filename) = parse_parent_and_child(&src_clone);
+                        Some(filename)
+                    };
+
+                    let mut has_permission_error = false;
+                    if let Some(ref filename) = test_file {
+                        let (src_fs, _) = if is_dir_clone {
+                            (src_clone.clone(), filename.clone())
+                        } else {
+                            parse_parent_and_child(&src_clone)
+                        };
+                        let (dst_fs, _) = if is_dir_clone {
+                            (dest_clone.clone(), filename.clone())
+                        } else {
+                            parse_parent_and_child(&dest_clone)
+                        };
+
+                        let test_param = json!({
+                            "srcFs": src_fs,
+                            "srcRemote": filename,
+                            "dstFs": dst_fs,
+                            "dstRemote": filename,
+                            "_config": {
+                                "DryRun": true
+                            }
+                        }).to_string();
+
+                        if let Ok(res) = rclone::rpc_async("operations/copyfile".to_string(), test_param).await {
+                            if res.status != 200 {
+                                let err_msg = res.output.to_lowercase();
+                                if err_msg.contains("restrictedlink") 
+                                    || err_msg.contains("download") 
+                                    || err_msg.contains("forbidden") 
+                                    || err_msg.contains("only the owner") 
+                                {
+                                    has_permission_error = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if has_permission_error {
+                        let _ = tx_check.send(AppEvent::PermissionErrorDetected {
+                            src: src_clone,
+                            dest: dest_clone,
+                            is_dir: is_dir_clone,
+                        });
+                    } else {
+                        let _ = tx_check.send(AppEvent::PermissionCheckPassed {
+                            src: src_clone,
+                            dest: dest_clone,
+                            is_dir: is_dir_clone,
+                        });
+                    }
                 });
             } else {
                 let mut options = Vec::new();
@@ -2745,6 +2819,53 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         result: res.clone(),
                     });
                     let _ = tx_clone.send(AppEvent::CryptdecodeResult { result: Ok(msg) });
+                });
+            }
+            ui::explorer::FallbackAction::PermissionCancel => {}
+            ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible { src, dest, is_dir: _ } => {
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                    src: src.clone(),
+                    dest: dest.clone(),
+                    pct: 0.0,
+                    job_id: None,
+                };
+                let tx_copy = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
+                tokio::spawn(async move {
+                    let res = run_rpc_job_async_with_progress(
+                        "sync/copy".to_string(),
+                        serde_json::json!({
+                            "srcFs": src_clone,
+                            "dstFs": dest_clone,
+                        }),
+                        Some((src_clone, dest_clone, true)),
+                        Some(tx_copy.clone()),
+                    ).await;
+                    let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
+                        pane: ui::explorer::ActivePane::Left,
+                        op_name: "sao chép nhiều nhất có thể (copy)".to_string(),
+                        result: res,
+                    });
+                });
+            }
+            ui::explorer::FallbackAction::PermissionRestrictedCopy { src, dest, is_dir } => {
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                    src: src.clone(),
+                    dest: dest.clone(),
+                    pct: 0.0,
+                    job_id: None,
+                };
+                let tx_copy = tx.clone();
+                let src_clone = src.clone();
+                let dest_clone = dest.clone();
+                tokio::spawn(async move {
+                    let res = execute_restricted_copy(src_clone, dest_clone, is_dir, tx_copy.clone()).await;
+                    let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
+                        pane: ui::explorer::ActivePane::Left,
+                        op_name: "sao chép hạn chế (restricted copy)".to_string(),
+                        result: res,
+                    });
                 });
             }
             ui::explorer::FallbackAction::Cancel => {}
@@ -3446,6 +3567,61 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 self.explorer_state.error_message = Some(e);
                             }
                         }
+                    }
+                    AppEvent::PermissionErrorDetected { src, dest, is_dir } => {
+                        let mut options = Vec::new();
+                        let mut actions = Vec::new();
+
+                        options.push(crate::lang::translate("exp_permission_option_cancel"));
+                        actions.push(ui::explorer::FallbackAction::PermissionCancel);
+
+                        options.push(crate::lang::translate("exp_permission_option_as_much"));
+                        actions.push(ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible {
+                            src: src.clone(),
+                            dest: dest.clone(),
+                            is_dir,
+                        });
+
+                        options.push(crate::lang::translate("exp_permission_option_restricted"));
+                        actions.push(ui::explorer::FallbackAction::PermissionRestrictedCopy {
+                            src: src.clone(),
+                            dest: dest.clone(),
+                            is_dir,
+                        });
+
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
+                            title: crate::lang::translate("exp_permission_error_title").to_string(),
+                            options,
+                            selected_idx: 0,
+                            actions,
+                        };
+                    }
+                    AppEvent::PermissionCheckPassed { src, dest, is_dir: _ } => {
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                            src: src.clone(),
+                            dest: dest.clone(),
+                            pct: 0.0,
+                            job_id: None,
+                        };
+                        let tx_copy = tx.clone();
+                        let src_clone = src.clone();
+                        let dest_clone = dest.clone();
+                        tokio::spawn(async move {
+                            let res = run_rpc_job_async_with_progress(
+                                "sync/copy".to_string(),
+                                json!({
+                                    "srcFs": src_clone,
+                                    "dstFs": dest_clone,
+                                }),
+                                Some((src_clone, dest_clone, true)),
+                                Some(tx_copy.clone()),
+                            ).await;
+                            let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
+                                pane: ui::explorer::ActivePane::Left,
+                                op_name: "sao chép (copy)".to_string(),
+                                result: res,
+                            });
+                        });
                     }
                 }
             }
@@ -6006,26 +6182,33 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     }
                     KeyCode::Enter => {
                         let chosen = remotes[selected_idx].clone();
-                        let active_pane = self.explorer_state.get_active_pane_mut();
-                        if chosen == "[Local System]" {
-                            active_pane.remote = String::new();
-                            active_pane.path = crate::app_config::get_home_dir();
+                        if chosen == crate::lang::translate("exp_add_shared_link_option") {
+                            self.explorer_state.edit_cursor_idx = 0;
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::InputSharedLink {
+                                input_buffer: String::new(),
+                            };
                         } else {
-                            active_pane.remote = chosen;
-                            active_pane.path = String::new();
-                        }
-                        active_pane.items.clear();
-                        active_pane.selected_idx = 0;
-                        active_pane.scroll_offset = 0;
-                        active_pane.selected_names.clear();
-                        active_pane.shift_anchor = None;
-                        active_pane.shift_active = false;
-                        active_pane.alt_anchor = None;
-                        active_pane.alt_active = false;
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            let active_pane = self.explorer_state.get_active_pane_mut();
+                            if chosen == "[Local System]" {
+                                active_pane.remote = String::new();
+                                active_pane.path = crate::app_config::get_home_dir();
+                            } else {
+                                active_pane.remote = chosen;
+                                active_pane.path = String::new();
+                            }
+                            active_pane.items.clear();
+                            active_pane.selected_idx = 0;
+                            active_pane.scroll_offset = 0;
+                            active_pane.selected_names.clear();
+                            active_pane.shift_anchor = None;
+                            active_pane.shift_active = false;
+                            active_pane.alt_anchor = None;
+                            active_pane.alt_active = false;
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
 
-                        let p_type = self.explorer_state.active_pane.clone();
-                        self.refresh_explorer_pane(p_type, tx.clone()).await;
+                            let p_type = self.explorer_state.active_pane.clone();
+                            self.refresh_explorer_pane(p_type, tx.clone()).await;
+                        }
                     }
                     _ => {}
                 },
@@ -6434,6 +6617,108 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         }
                     }
                 }
+                ui::explorer::ExplorerPopup::InputSharedLink { mut input_buffer } => {
+                    let mut cursor = self.explorer_state.edit_cursor_idx;
+                    if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                        self.explorer_state.edit_cursor_idx = cursor;
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::InputSharedLink { input_buffer };
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            }
+                            KeyCode::Enter => {
+                                let link = input_buffer.trim().to_string();
+                                if !link.is_empty() {
+                                    let mut folder_id = link.clone();
+                                    if link.contains('/') {
+                                        if let Some(pos) = link.find("folders/") {
+                                            let sub = &link[pos + 8..];
+                                            folder_id = sub.split('?').next().unwrap_or(sub).to_string();
+                                        } else if let Some(pos) = link.find("id=") {
+                                            let sub = &link[pos + 3..];
+                                            folder_id = sub.split('&').next().unwrap_or(sub).to_string();
+                                        } else if let Some(pos) = link.find("/d/") {
+                                            let sub = &link[pos + 3..];
+                                            folder_id = sub.split('/').next().unwrap_or(sub).to_string();
+                                        }
+                                    }
+
+                                    let mut drive_remotes = Vec::new();
+                                    for remote in &self.connection_state.remotes {
+                                        if let Some(r_type) = self.remote_types.get(remote) {
+                                            if r_type == "drive" {
+                                                drive_remotes.push(remote.clone());
+                                            }
+                                        }
+                                    }
+
+                                    if drive_remotes.is_empty() {
+                                        self.explorer_state.error_message = Some("Không tìm thấy remote Google Drive nào được cấu hình trong hệ thống làm base credentials!".to_string());
+                                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                                    } else {
+                                        self.explorer_state.popup = ui::explorer::ExplorerPopup::SelectBaseRemote {
+                                            remotes: drive_remotes,
+                                            selected_idx: 0,
+                                            folder_id,
+                                        };
+                                    }
+                                } else {
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                ui::explorer::ExplorerPopup::SelectBaseRemote {
+                    remotes,
+                    mut selected_idx,
+                    folder_id,
+                } => match key.code {
+                    KeyCode::Esc => {
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                    }
+                    KeyCode::Up => {
+                        if selected_idx == 0 {
+                            selected_idx = remotes.len() - 1;
+                        } else {
+                            selected_idx -= 1;
+                        }
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::SelectBaseRemote {
+                            remotes,
+                            selected_idx,
+                            folder_id,
+                        };
+                    }
+                    KeyCode::Down => {
+                        selected_idx = (selected_idx + 1) % remotes.len();
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::SelectBaseRemote {
+                            remotes,
+                            selected_idx,
+                            folder_id,
+                        };
+                    }
+                    KeyCode::Enter => {
+                        let base_remote = remotes[selected_idx].clone();
+                        let active_pane = self.explorer_state.get_active_pane_mut();
+                        active_pane.remote = format!("{},root_folder_id={}:", base_remote.trim_end_matches(':'), folder_id);
+                        active_pane.path = String::new();
+                        active_pane.items.clear();
+                        active_pane.selected_idx = 0;
+                        active_pane.scroll_offset = 0;
+                        active_pane.selected_names.clear();
+                        active_pane.shift_anchor = None;
+                        active_pane.shift_active = false;
+                        active_pane.alt_anchor = None;
+                        active_pane.alt_active = false;
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+
+                        let p_type = self.explorer_state.active_pane.clone();
+                        self.refresh_explorer_pane(p_type, tx.clone()).await;
+                    }
+                    _ => {}
+                }
                 _ => {}
             }
             return;
@@ -6622,6 +6907,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 // Ctrl+R: Mở danh sách remote để lựa chọn cho pane hiện tại
                 let mut remotes = vec!["[Local System]".to_string()];
                 remotes.extend(self.connection_state.remotes.clone());
+                remotes.push(crate::lang::translate("exp_add_shared_link_option"));
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::SelectRemote {
                     remotes,
                     selected_idx: 0,
@@ -10277,5 +10563,228 @@ fn get_rclone_cmd() -> String {
         }
     }
     "rclone".to_string()
+}
+
+fn join_fs_path(fs: &str, sub_path: &str) -> String {
+    if fs.contains(':') {
+        let parts: Vec<&str> = fs.splitn(2, ':').collect();
+        let remote = parts[0];
+        let path = parts[1];
+        let joined_path = if path.is_empty() {
+            sub_path.to_string()
+        } else if path.ends_with('/') {
+            format!("{}{}", path, sub_path)
+        } else {
+            format!("{}/{}", path, sub_path)
+        };
+        format!("{}:{}", remote, joined_path)
+    } else {
+        if fs.ends_with('/') {
+            format!("{}{}", fs, sub_path)
+        } else {
+            format!("{}/{}", fs, sub_path)
+        }
+    }
+}
+
+async fn execute_restricted_copy(
+    src: String,
+    dest: String,
+    is_dir: bool,
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) -> Result<(), String> {
+    if !is_dir {
+        let (src_fs, src_file) = parse_parent_and_child(&src);
+        let (dst_fs, dst_file) = parse_parent_and_child(&dest);
+        let param = serde_json::json!({
+            "srcFs": src_fs,
+            "srcRemote": src_file,
+            "dstFs": dst_fs,
+            "dstRemote": dst_file,
+        }).to_string();
+
+        let res = rclone::rpc_async("operations/copyfile".to_string(), param).await;
+        match res {
+            Ok(rpc_res) => {
+                if rpc_res.status == 200 {
+                    let _ = tx.send(AppEvent::CopyProgress {
+                        src: src.clone(),
+                        dest: dest.clone(),
+                        pct: 100.0,
+                        job_id: None,
+                    });
+                    Ok(())
+                } else {
+                    let err = format!("Lỗi sao chép tệp: {}", rpc_res.output);
+                    Err(err)
+                }
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        let list_param = serde_json::json!({
+            "fs": src,
+            "remote": "",
+            "opt": {
+                "recurse": true
+            }
+        }).to_string();
+
+        let list_res = rclone::rpc_async("operations/list".to_string(), list_param).await?;
+        if list_res.status != 200 {
+            return Err(format!("Lỗi khi liệt kê thư mục nguồn: {}", list_res.output));
+        }
+
+        let val: serde_json::Value = serde_json::from_str(&list_res.output)
+            .map_err(|e| format!("Lỗi parse JSON kết quả list: {}", e))?;
+
+        let list_arr = match val.get("list").and_then(|l| l.as_array()) {
+            Some(arr) => arr,
+            None => {
+                let mkdir_param = serde_json::json!({
+                    "fs": dest,
+                    "remote": "",
+                }).to_string();
+                let mkdir_res = rclone::rpc_async("operations/mkdir".to_string(), mkdir_param).await?;
+                if mkdir_res.status != 200 {
+                    return Err(format!("Lỗi khi tạo thư mục đích: {}", mkdir_res.output));
+                }
+                let _ = tx.send(AppEvent::CopyProgress {
+                    src: src.clone(),
+                    dest: dest.clone(),
+                    pct: 100.0,
+                    job_id: None,
+                });
+                return Ok(());
+            }
+        };
+
+        if list_arr.is_empty() {
+            let mkdir_param = serde_json::json!({
+                "fs": dest,
+                "remote": "",
+            }).to_string();
+            let mkdir_res = rclone::rpc_async("operations/mkdir".to_string(), mkdir_param).await?;
+            if mkdir_res.status != 200 {
+                return Err(format!("Lỗi khi tạo thư mục đích: {}", mkdir_res.output));
+            }
+            let _ = tx.send(AppEvent::CopyProgress {
+                src: src.clone(),
+                dest: dest.clone(),
+                pct: 100.0,
+                job_id: None,
+            });
+            return Ok(());
+        }
+
+        let mut files = Vec::new();
+        let mut dirs = Vec::new();
+
+        for item in list_arr {
+            let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+            if path.is_empty() {
+                continue;
+            }
+            let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+            if is_item_dir {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+
+        let mut empty_dirs = Vec::new();
+        for dir in &dirs {
+            let prefix = format!("{}/", dir);
+            let has_files = files.iter().any(|f| f.starts_with(&prefix));
+            let has_subdirs = dirs.iter().any(|d| d != dir && d.starts_with(&prefix));
+            if !has_files && !has_subdirs {
+                empty_dirs.push(dir.clone());
+            }
+        }
+
+        let total_files = files.len();
+        let mut success_count = 0;
+        let mut error_messages = Vec::new();
+
+        for (idx, file_path) in files.iter().enumerate() {
+            let pct = (idx as f64) / (total_files as f64) * 100.0;
+            let _ = tx.send(AppEvent::CopyProgress {
+                src: src.clone(),
+                dest: dest.clone(),
+                pct,
+                job_id: None,
+            });
+
+            let (parent_path, file_name) = if let Some(last_slash_idx) = file_path.rfind('/') {
+                (&file_path[..last_slash_idx], &file_path[last_slash_idx+1..])
+            } else {
+                ("", file_path.as_str())
+            };
+
+            let src_fs = if parent_path.is_empty() {
+                src.clone()
+            } else {
+                join_fs_path(&src, parent_path)
+            };
+
+            let dst_fs = if parent_path.is_empty() {
+                dest.clone()
+            } else {
+                join_fs_path(&dest, parent_path)
+            };
+
+            let copy_param = serde_json::json!({
+                "srcFs": src_fs,
+                "srcRemote": file_name,
+                "dstFs": dst_fs,
+                "dstRemote": file_name,
+            }).to_string();
+
+            let copy_res = rclone::rpc_async("operations/copyfile".to_string(), copy_param).await;
+            match copy_res {
+                Ok(rpc_res) => {
+                    if rpc_res.status == 200 {
+                        success_count += 1;
+                    } else {
+                        let err_msg = rpc_res.output.to_lowercase();
+                        if err_msg.contains("restrictedlink") 
+                            || err_msg.contains("download") 
+                            || err_msg.contains("forbidden") 
+                            || err_msg.contains("only the owner")
+                        {
+                            // Skip restricted download files
+                        } else {
+                            error_messages.push(format!("File {}: {}", file_path, rpc_res.output));
+                        }
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!("File {}: {}", file_path, e));
+                }
+            }
+        }
+
+        for empty_dir in &empty_dirs {
+            let mkdir_param = serde_json::json!({
+                "fs": dest.clone(),
+                "remote": empty_dir,
+            }).to_string();
+            let _ = rclone::rpc_async("operations/mkdir".to_string(), mkdir_param).await;
+        }
+
+        let _ = tx.send(AppEvent::CopyProgress {
+            src: src.clone(),
+            dest: dest.clone(),
+            pct: 100.0,
+            job_id: None,
+        });
+
+        if success_count == 0 && total_files > 0 && !error_messages.is_empty() {
+            Err(format!("Không sao chép được file nào. Các lỗi gặp phải:\n{}", error_messages.join("\n")))
+        } else {
+            Ok(())
+        }
+    }
 }
 

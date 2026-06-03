@@ -101,6 +101,9 @@ pub enum FallbackAction {
     Rmdir { fs: String, remote: String },
     Rmdirs { fs: String, remote: String },
     Cancel,
+    PermissionCancel,
+    PermissionCopyAsMuchAsPossible { src: String, dest: String, is_dir: bool },
+    PermissionRestrictedCopy { src: String, dest: String, is_dir: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -181,6 +184,14 @@ pub enum ExplorerPopup {
     },
     InputPasteRename {
         input_buffer: String,
+    },
+    InputSharedLink {
+        input_buffer: String,
+    },
+    SelectBaseRemote {
+        remotes: Vec<String>,
+        selected_idx: usize,
+        folder_id: String,
     },
 }
 
@@ -442,6 +453,12 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
         }
         ExplorerPopup::InputPasteRename { input_buffer } => {
             draw_input_paste_rename(frame, input_buffer, state.edit_cursor_idx);
+        }
+        ExplorerPopup::InputSharedLink { input_buffer } => {
+            draw_input_shared_link(frame, input_buffer, state.edit_cursor_idx);
+        }
+        ExplorerPopup::SelectBaseRemote { remotes, selected_idx, .. } => {
+            draw_select_base_remote_popup(frame, remotes, *selected_idx);
         }
         ExplorerPopup::None => {}
     }
@@ -1201,3 +1218,72 @@ fn draw_input_paste_rename(frame: &mut Frame, input_buffer: &str, cursor_idx: us
 }
 
 use super::centered_rect;
+
+fn draw_input_shared_link(frame: &mut Frame, input_buffer: &str, cursor_idx: usize) {
+    let size = frame.size();
+    let area = centered_rect(65, 25, size);
+    frame.render_widget(Clear, area);
+
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Cyan))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
+    let text = vec![
+        Line::from(crate::lang::translate("exp_input_shared_link_prompt")),
+        Line::from(""),
+        Line::from(spans),
+        Line::from(""),
+        Line::from("[Enter] Xác nhận | [Esc] Hủy bỏ"),
+    ];
+
+    let block = Block::default()
+        .title(Span::styled(
+            " THÊM LINK SHARED (GOOGLE DRIVE) ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let paragraph = Paragraph::new(text).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_select_base_remote_popup(frame: &mut Frame, remotes: &[String], selected_idx: usize) {
+    let size = frame.size();
+    let area = centered_rect(50, 45, size);
+    frame.render_widget(Clear, area);
+
+    let items: Vec<ListItem> = remotes
+        .iter()
+        .enumerate()
+        .map(|(i, remote)| {
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("  {}", remote)).style(style)
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(Span::styled(
+            crate::lang::translate("exp_select_base_remote_title"),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let height = area.height.saturating_sub(2) as usize;
+    let range = super::calculate_scroll_range(selected_idx, items.len(), height);
+    let visible_items: Vec<ListItem> = items.into_iter().skip(range.start).take(range.end - range.start).collect();
+
+    let list = List::new(visible_items).block(block);
+    frame.render_widget(list, area);
+}
