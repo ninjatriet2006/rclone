@@ -434,8 +434,12 @@ impl App {
                                 }
                             }
                         } else {
+                            let err_msg = serde_json::from_str::<serde_json::Value>(&rpc_res.output)
+                                .ok()
+                                .and_then(|val| val.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+                                .unwrap_or_else(|| format!("Lỗi kết nối RPC: {}", rpc_res.status));
                             let _ = tx.send(AppEvent::WizardGuiListResult {
-                                result: Err(format!("Lỗi kết nối RPC: {}", rpc_res.status)),
+                                result: Err(err_msg),
                             });
                         }
                     }

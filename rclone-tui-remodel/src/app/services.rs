@@ -645,20 +645,57 @@ impl App {
         self.services_state.systemd_services.clear();
     }
 
+    pub(crate) fn escape_systemd_arg(&self, arg: &str) -> String {
+        let mut escaped = String::new();
+        for c in arg.chars() {
+            if c == '\\' || c == '"' {
+                escaped.push('\\');
+            }
+            escaped.push(c);
+        }
+        escaped
+    }
+
     pub(crate) fn parse_exec_start_full(
         &self,
         exec_start: &str,
     ) -> (String, String, std::collections::HashMap<String, String>) {
-        let words: Vec<&str> = exec_start.split_whitespace().collect();
+        let mut words = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = exec_start.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(&next_c) = chars.peek() {
+                    current.push(next_c);
+                    chars.next();
+                } else {
+                    current.push('\\');
+                }
+            } else if c == '"' {
+                in_quotes = !in_quotes;
+            } else if c.is_whitespace() && !in_quotes {
+                if !current.is_empty() {
+                    words.push(current.clone());
+                    current.clear();
+                }
+            } else {
+                current.push(c);
+            }
+        }
+        if !current.is_empty() {
+            words.push(current);
+        }
+
         let mut remote = String::new();
         let mut mount_path = String::new();
         let mut flags = std::collections::HashMap::new();
         
-        if let Some(mount_pos) = words.iter().position(|&w| w == "mount") {
+        if let Some(mount_pos) = words.iter().position(|w| w == "mount") {
             let mut non_flags = Vec::new();
             let mut i = mount_pos + 1;
             while i < words.len() {
-                let w = words[i];
+                let w = &words[i];
                 if w.starts_with("--") {
                     if let Some(eq_pos) = w.find('=') {
                         let key = w[..eq_pos].to_string();
@@ -666,14 +703,14 @@ impl App {
                         flags.insert(key, val);
                     } else {
                         if i + 1 < words.len() && !words[i + 1].starts_with("--") {
-                            flags.insert(w.to_string(), words[i + 1].to_string());
+                            flags.insert(w.clone(), words[i + 1].clone());
                             i += 1;
                         } else {
-                            flags.insert(w.to_string(), "true".to_string());
+                            flags.insert(w.clone(), "true".to_string());
                         }
                     }
                 } else {
-                    non_flags.push(w.to_string());
+                    non_flags.push(w.clone());
                 }
                 i += 1;
             }
@@ -1107,8 +1144,11 @@ impl App {
             let rclone_path = get_rclone_exec_path();
 
             let mut exec_start = format!(
-                "{} mount {} {} --config {}",
-                rclone_path, remote, mount_path, config_path
+                "{} mount \"{}\" \"{}\" --config \"{}\"",
+                rclone_path,
+                self.escape_systemd_arg(&remote),
+                self.escape_systemd_arg(&mount_path),
+                self.escape_systemd_arg(&config_path)
             );
             
             let vfs_cache_mode = get_val("_flag_vfs_cache_mode");
@@ -1156,7 +1196,7 @@ impl App {
                 exec_start.push_str(" --allow-non-empty");
             }
             let fusermount_path = get_fusermount_exec_path();
-            let exec_stop = format!("{} -uz {}", fusermount_path, mount_path);
+            let exec_stop = format!("{} -uz \"{}\"", fusermount_path, self.escape_systemd_arg(&mount_path));
 
             let mut update_raw = |key: &str, val: &str| {
                 if let Some(item) = final_fields.iter_mut().find(|(k, _, _, _)| k == key) {
@@ -1610,3 +1650,42 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::app::App;
+
+    #[test]
+    fn test_escape_systemd_arg() {
+        let app = App::new();
+        assert_eq!(app.escape_systemd_arg("normal_path"), "normal_path");
+        assert_eq!(app.escape_systemd_arg("path\\with\\backslash"), "path\\\\with\\\\backslash");
+        assert_eq!(app.escape_systemd_arg("path with \"quotes\""), "path with \\\"quotes\\\"");
+    }
+
+    #[test]
+    fn test_parse_exec_start_full() {
+        let app = App::new();
+        // Test normal paths
+        let line1 = "/usr/bin/rclone mount remote: /path/to/mount --config /path/to/config.conf";
+        let (remote1, mount_path1, flags1) = app.parse_exec_start_full(line1);
+        assert_eq!(remote1, "remote:");
+        assert_eq!(mount_path1, "/path/to/mount");
+        assert_eq!(flags1.get("--config").cloned(), Some("/path/to/config.conf".to_string()));
+
+        // Test paths with spaces and quotes
+        let line2 = "/usr/bin/rclone mount \"remote with spaces:\" \"/path with spaces/to/mount\" --config \"/path with spaces/config.conf\" --allow-other";
+        let (remote2, mount_path2, flags2) = app.parse_exec_start_full(line2);
+        assert_eq!(remote2, "remote with spaces:");
+        assert_eq!(mount_path2, "/path with spaces/to/mount");
+        assert_eq!(flags2.get("--config").cloned(), Some("/path with spaces/config.conf".to_string()));
+        assert_eq!(flags2.get("--allow-other").cloned(), Some("true".to_string()));
+
+        // Test escaped quotes and backslashes
+        let line3 = "/usr/bin/rclone mount \"remote:\\\"name\\\"\" \"/path\\\\with\\\\backslash\"";
+        let (remote3, mount_path3, _flags3) = app.parse_exec_start_full(line3);
+        assert_eq!(remote3, "remote:\"name\"");
+        assert_eq!(mount_path3, "/path\\with\\backslash");
+    }
+}
+

@@ -470,6 +470,30 @@ impl App {
                     }
                 } else {
                     match key.code {
+                        KeyCode::Backspace => {
+                            if current_path != "/" && !current_path.is_empty() {
+                                let mut parts: Vec<&str> = current_path.split('/').filter(|s| !s.is_empty()).collect();
+                                if !parts.is_empty() {
+                                    parts.pop();
+                                }
+                                current_path = if parts.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    format!("/{}", parts.join("/"))
+                                };
+                            }
+                            self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectPath {
+                                service_type,
+                                remote,
+                                current_path,
+                                items: Vec::new(),
+                                selected_idx: 0,
+                                loading: true,
+                                error_msg: None,
+                                creating_folder: None,
+                            };
+                            self.refresh_wizard_gui_list(tx.clone()).await;
+                        }
                         KeyCode::Esc => {
                             if let Some(return_tgt) = self.services_state.systemd_wizard_return.take() {
                                 match return_tgt {
@@ -892,6 +916,31 @@ impl App {
                             } else {
                                 self.services_state.wizard = ui::services::ServicesWizardState::None;
                             }
+                        }
+                        KeyCode::Backspace => {
+                            if current_path != "/" && !current_path.is_empty() {
+                                let mut parts: Vec<&str> = current_path.split('/').filter(|s| !s.is_empty()).collect();
+                                if !parts.is_empty() {
+                                    parts.pop();
+                                }
+                                current_path = if parts.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    format!("/{}", parts.join("/"))
+                                };
+                            }
+                            self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectLocalPath {
+                                service_type,
+                                remote,
+                                remote_path,
+                                current_path,
+                                items: Vec::new(),
+                                selected_idx: 0,
+                                loading: true,
+                                error_msg: None,
+                                creating_folder: None,
+                            };
+                            self.refresh_wizard_gui_list(tx.clone()).await;
                         }
                         KeyCode::Up => {
                             if !items.is_empty() {
@@ -1570,6 +1619,75 @@ impl App {
                                         service_name, file_path, is_user, fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
                                     };
                                 }
+                                KeyCode::Insert => {
+                                    if active_tab == 0 && selected_idx < filtered_fields.len() {
+                                        let field_name = filtered_fields[selected_idx].0.as_str();
+                                        if field_name == "_remote" || field_name == "_mount_path" {
+                                            let mut fields_updated = fields.clone();
+                                            if let Some(item) = fields_updated.iter_mut().find(|(k, _, _, _)| k == field_name) {
+                                                item.2 = input_buffer.clone();
+                                            }
+                                            self.services_state.systemd_wizard_return = Some(ui::services::WizardReturnTarget::EditSystemd {
+                                                service_name: service_name.clone(),
+                                                file_path: file_path.clone(),
+                                                is_user,
+                                                fields: fields_updated,
+                                                selected_idx,
+                                                scroll_offset,
+                                                active_tab,
+                                                target_field: field_name.to_string(),
+                                            });
+
+                                            if field_name == "_remote" {
+                                                let current_val = input_buffer.clone();
+                                                let (remote_part, path_part) = if let Some(pos) = current_val.find(':') {
+                                                    (current_val[..pos].to_string(), current_val[pos+1..].to_string())
+                                                } else {
+                                                    (current_val.clone(), String::new())
+                                                };
+                                                let current_path = if path_part.is_empty() {
+                                                    "/".to_string()
+                                                } else if path_part.starts_with('/') {
+                                                    path_part
+                                                } else {
+                                                    format!("/{}", path_part)
+                                                };
+
+                                                self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectPath {
+                                                    service_type: ui::services::ServiceType::Mount,
+                                                    remote: if remote_part.is_empty() { String::new() } else { format!("{}:", remote_part) },
+                                                    current_path,
+                                                    items: Vec::new(),
+                                                    selected_idx: 0,
+                                                    loading: true,
+                                                    error_msg: None,
+                                                    creating_folder: None,
+                                                };
+                                                self.refresh_wizard_gui_list(tx.clone()).await;
+                                            } else {
+                                                let current_val = input_buffer.clone();
+                                                let current_path = if current_val.is_empty() {
+                                                    "/".to_string()
+                                                } else {
+                                                    current_val
+                                                };
+
+                                                self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectLocalPath {
+                                                    service_type: ui::services::ServiceType::Mount,
+                                                    remote: String::new(),
+                                                    remote_path: String::new(),
+                                                    current_path,
+                                                    items: Vec::new(),
+                                                    selected_idx: 0,
+                                                    loading: true,
+                                                    error_msg: None,
+                                                    creating_folder: None,
+                                                };
+                                                self.refresh_wizard_gui_list(tx.clone()).await;
+                                            }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -1857,6 +1975,72 @@ impl App {
                                     self.services_state.wizard = ui::services::ServicesWizardState::CreateSystemdService {
                                         fields, selected_idx, scroll_offset, is_editing: false, input_buffer: String::new(), active_tab, adding_new_key, new_key_buffer
                                     };
+                                }
+                                KeyCode::Insert => {
+                                    if active_tab == 0 && selected_idx < filtered_fields.len() {
+                                        let field_name = filtered_fields[selected_idx].0.as_str();
+                                        if field_name == "_remote" || field_name == "_mount_path" {
+                                            let mut fields_updated = fields.clone();
+                                            if let Some(item) = fields_updated.iter_mut().find(|(k, _, _, _)| k == field_name) {
+                                                item.2 = input_buffer.clone();
+                                            }
+                                            self.services_state.systemd_wizard_return = Some(ui::services::WizardReturnTarget::CreateSystemd {
+                                                fields: fields_updated,
+                                                selected_idx,
+                                                scroll_offset,
+                                                active_tab,
+                                                target_field: field_name.to_string(),
+                                            });
+
+                                            if field_name == "_remote" {
+                                                let current_val = input_buffer.clone();
+                                                let (remote_part, path_part) = if let Some(pos) = current_val.find(':') {
+                                                    (current_val[..pos].to_string(), current_val[pos+1..].to_string())
+                                                } else {
+                                                    (current_val.clone(), String::new())
+                                                };
+                                                let current_path = if path_part.is_empty() {
+                                                    "/".to_string()
+                                                } else if path_part.starts_with('/') {
+                                                    path_part
+                                                } else {
+                                                    format!("/{}", path_part)
+                                                };
+
+                                                self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectPath {
+                                                    service_type: ui::services::ServiceType::Mount,
+                                                    remote: if remote_part.is_empty() { String::new() } else { format!("{}:", remote_part) },
+                                                    current_path,
+                                                    items: Vec::new(),
+                                                    selected_idx: 0,
+                                                    loading: true,
+                                                    error_msg: None,
+                                                    creating_folder: None,
+                                                };
+                                                self.refresh_wizard_gui_list(tx.clone()).await;
+                                            } else {
+                                                let current_val = input_buffer.clone();
+                                                let current_path = if current_val.is_empty() {
+                                                    "/".to_string()
+                                                } else {
+                                                    current_val
+                                                };
+
+                                                self.services_state.wizard = ui::services::ServicesWizardState::GuiSelectLocalPath {
+                                                    service_type: ui::services::ServiceType::Mount,
+                                                    remote: String::new(),
+                                                    remote_path: String::new(),
+                                                    current_path,
+                                                    items: Vec::new(),
+                                                    selected_idx: 0,
+                                                    loading: true,
+                                                    error_msg: None,
+                                                    creating_folder: None,
+                                                };
+                                                self.refresh_wizard_gui_list(tx.clone()).await;
+                                            }
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }

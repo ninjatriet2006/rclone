@@ -1058,7 +1058,7 @@ fn draw_gui_select_path(
             .alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(loading_p, layout[1]);
     } else if let Some(err) = error_msg {
-        let err_p = Paragraph::new(format!("LỖI: {}", err))
+        let err_p = Paragraph::new(format!("LỖI: {}\n\nNhấn [Backspace] để quay lại thư mục cha.", err))
             .block(list_block)
             .style(Style::default().fg(Color::Red))
             .alignment(ratatui::layout::Alignment::Center);
