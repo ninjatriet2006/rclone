@@ -102,8 +102,10 @@ pub enum FallbackAction {
     Rmdirs { fs: String, remote: String },
     Cancel,
     PermissionCancel,
-    PermissionCopyAsMuchAsPossible { src: String, dest: String, is_dir: bool },
-    PermissionRestrictedCopy { src: String, dest: String, is_dir: bool },
+    PermissionCopyAsMuchAsPossible { src: String, dest: String, is_dir: bool, restricted_files: Vec<String> },
+    PermissionRestrictedCopy { src: String, dest: String, is_dir: bool, restricted_files: Vec<String> },
+    MultiPermissionCopyAsMuchAsPossible { items: Vec<ClipboardItem>, dest_remote: String, dest_path: String, restricted_files: Vec<String> },
+    MultiPermissionRestrictedCopy { items: Vec<ClipboardItem>, dest_remote: String, dest_path: String, restricted_files: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +136,9 @@ pub enum ExplorerPopup {
         options: Vec<String>,
         selected_idx: usize,
         actions: Vec<FallbackAction>,
+        restricted_files: Option<Vec<String>>,
+        restricted_scroll: usize,
+        focus_files: bool,
     },
     InputRename {
         old_name: String,
@@ -193,10 +198,18 @@ pub enum ExplorerPopup {
         selected_idx: usize,
         folder_id: String,
     },
+    PermissionScanning {
+        src: String,
+        dest: String,
+        is_dir: bool,
+        scanned_count: usize,
+        total_files: usize,
+        restricted_count: usize,
+    },
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClipboardItem {
     pub remote: String,
     pub path: String,
@@ -209,7 +222,7 @@ pub struct ExplorerState {
     pub right_pane: ExplorerPane,
     pub active_pane: ActivePane,
     pub popup: ExplorerPopup,
-    pub error_message: Option<String>,
+    pub notification: Option<(String, String)>,
     pub clipboard: Option<ClipboardItem>,
     pub clipboard_items: Option<Vec<ClipboardItem>>,
     pub edit_cursor_idx: usize,
@@ -222,7 +235,7 @@ impl ExplorerState {
             right_pane: ExplorerPane::new(""),
             active_pane: ActivePane::Left,
             popup: ExplorerPopup::None,
-            error_message: None,
+            notification: None,
             clipboard: None,
             clipboard_items: None,
             edit_cursor_idx: 0,
@@ -417,9 +430,20 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             title,
             options,
             selected_idx,
+            restricted_files,
+            restricted_scroll,
+            focus_files,
             ..
         } => {
-            draw_confirm_fallback_popup(frame, title, options, *selected_idx);
+            draw_confirm_fallback_popup(
+                frame,
+                title,
+                options,
+                *selected_idx,
+                restricted_files,
+                *restricted_scroll,
+                *focus_files,
+            );
         }
         ExplorerPopup::InputRename { old_name, input_buffer, .. } => {
             draw_input_rename(frame, old_name, input_buffer, state.edit_cursor_idx);
@@ -460,11 +484,14 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
         ExplorerPopup::SelectBaseRemote { remotes, selected_idx, .. } => {
             draw_select_base_remote_popup(frame, remotes, *selected_idx);
         }
+        ExplorerPopup::PermissionScanning { src, dest, is_dir: _, scanned_count, total_files, restricted_count } => {
+            draw_permission_scanning_popup(frame, src, dest, *scanned_count, *total_files, *restricted_count);
+        }
         ExplorerPopup::None => {}
     }
 
-    if let Some(ref err) = state.error_message {
-        super::draw_popup(frame, &crate::lang::translate("exp_error_title"), err, 60, 30);
+    if let Some((ref title, ref msg)) = state.notification {
+        super::draw_popup(frame, title, msg, 60, 30);
     }
 }
 
@@ -715,61 +742,177 @@ fn draw_select_remote_popup(frame: &mut Frame, remotes: &[String], selected_idx:
     frame.render_widget(list, area);
 }
 
-fn draw_confirm_fallback_popup(frame: &mut Frame, title: &str, options: &[String], selected_idx: usize) {
+fn draw_confirm_fallback_popup(
+    frame: &mut Frame,
+    title: &str,
+    options: &[String],
+    selected_idx: usize,
+    restricted_files: &Option<Vec<String>>,
+    restricted_scroll: usize,
+    focus_files: bool,
+) {
     let size = frame.size();
-    let area = centered_rect(65, 50, size);
+    let area = if restricted_files.is_some() {
+        centered_rect(75, 70, size)
+    } else {
+        centered_rect(65, 50, size)
+    };
     frame.render_widget(Clear, area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Warning header
-            Constraint::Min(4),    // Options list
-        ])
-        .split(area);
+    let chunks = if restricted_files.is_some() {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Warning header
+                Constraint::Min(6),    // Scrollable restricted files list
+                Constraint::Length(6), // Options list
+                Constraint::Length(2), // Help / Instructions footer
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Warning header
+                Constraint::Min(4),    // Options list
+            ])
+            .split(area)
+    };
 
     // Render warning title / header
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled("⚠️ CẢNH BÁO: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::raw("Tính năng này không hỗ trợ trực tiếp bởi Remote!"),
-    ]))
-    .block(Block::default().borders(Borders::BOTTOM))
-    .style(Style::default().fg(Color::White));
+    let header_text = if restricted_files.is_some() {
+        Line::from(vec![
+            Span::styled("⚠️ PHÁT HIỆN QUYỀN TRUY CẬP BỊ HẠN CHẾ (ACCESS RESTRICTED): ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("Một số tệp tin không có quyền tải xuống!"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("⚠️ CẢNH BÁO: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("Tính năng này không hỗ trợ trực tiếp bởi Remote!"),
+        ])
+    };
+    
+    let header = Paragraph::new(header_text)
+        .block(Block::default().borders(Borders::BOTTOM))
+        .style(Style::default().fg(Color::White));
     frame.render_widget(header, chunks[0]);
 
-    // Render options list
-    let items: Vec<ListItem> = options
-        .iter()
-        .enumerate()
-        .map(|(i, opt)| {
-            let style = if i == selected_idx {
+    if let Some(files) = restricted_files {
+        let files_border_color = if focus_files { Color::Cyan } else { Color::DarkGray };
+        let files_title = format!(" DANH SÁCH FILE BỊ KHÓA / CHẶN TẢI ({}) ", files.len());
+        let files_block = Block::default()
+            .title(Span::styled(files_title, Style::default().fg(files_border_color).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(files_border_color));
+        
+        let files_height = chunks[1].height.saturating_sub(2) as usize;
+        let range = super::calculate_scroll_range(restricted_scroll, files.len(), files_height);
+        
+        let file_items: Vec<ListItem> = files[range.clone()]
+            .iter()
+            .enumerate()
+            .map(|(idx, f)| {
+                let actual_idx = range.start + idx;
+                let is_selected_file = actual_idx == restricted_scroll;
+                
+                let prefix = if is_selected_file && focus_files {
+                    "👉 "
+                } else {
+                    "   "
+                };
+                
+                let style = if is_selected_file && focus_files {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else if is_selected_file {
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("  {:02}. ", actual_idx + 1), Style::default().fg(Color::DarkGray)),
+                    Span::styled("🔒 ", Style::default().fg(Color::Red)),
+                    Span::styled(prefix, Style::default().fg(Color::Yellow)),
+                    Span::styled(f.clone(), style),
+                ]))
+            })
+            .collect();
+            
+        let list = List::new(file_items).block(files_block);
+        frame.render_widget(list, chunks[1]);
+
+        let options_border_color = if !focus_files { Color::Cyan } else { Color::DarkGray };
+        let options_title = " LỰA CHỌN PHƯƠNG ÁN XỬ LÝ ";
+        let options_block = Block::default()
+            .title(Span::styled(options_title, Style::default().fg(options_border_color).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(options_border_color));
+
+        let items: Vec<ListItem> = options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let style = if !focus_files && i == selected_idx {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if i == selected_idx {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::UNDERLINED)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("  • {}", opt)).style(style)
+            })
+            .collect();
+        
+        let list = List::new(items).block(options_block);
+        frame.render_widget(list, chunks[2]);
+
+        let help_text = if focus_files {
+            " [Tab] Chuyển Focus | [Up/Down] Cuộn danh sách file | [Esc] Hủy "
+        } else {
+            " [Tab] Chuyển Focus | [Up/Down] Chọn phương án | [Enter] Thực thi | [Esc] Hủy "
+        };
+        let help_paragraph = Paragraph::new(super::parse_help_line(help_text));
+        frame.render_widget(help_paragraph, chunks[3]);
+    } else {
+        // Render options list
+        let items: Vec<ListItem> = options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let style = if i == selected_idx {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("  • {}", opt)).style(style)
+            })
+            .collect();
+
+        let block = Block::default()
+            .title(Span::styled(
+                title,
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(format!("  • {}", opt)).style(style)
-        })
-        .collect();
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
 
-    let block = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        let height = chunks[1].height.saturating_sub(2) as usize;
+        let range = super::calculate_scroll_range(selected_idx, items.len(), height);
+        let visible_items: Vec<ListItem> = items.into_iter().skip(range.start).take(range.end - range.start).collect();
 
-    let height = chunks[1].height.saturating_sub(2) as usize;
-    let range = super::calculate_scroll_range(selected_idx, items.len(), height);
-    let visible_items: Vec<ListItem> = items.into_iter().skip(range.start).take(range.end - range.start).collect();
-
-    let list = List::new(visible_items).block(block);
-    frame.render_widget(list, chunks[1]);
+        let list = List::new(visible_items).block(block);
+        frame.render_widget(list, chunks[1]);
+    }
 }
 
 fn draw_input_rename(frame: &mut Frame, old_name: &str, input_buffer: &str, cursor_idx: usize) {
@@ -1286,4 +1429,89 @@ fn draw_select_base_remote_popup(frame: &mut Frame, remotes: &[String], selected
 
     let list = List::new(visible_items).block(block);
     frame.render_widget(list, area);
+}
+
+fn draw_permission_scanning_popup(
+    frame: &mut Frame,
+    src: &str,
+    dest: &str,
+    scanned_count: usize,
+    total_files: usize,
+    restricted_count: usize,
+) {
+    let size = frame.size();
+    let area = centered_rect(65, 35, size);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Span::styled(
+            " KIỂM TRA QUYỀN SỞ HỮU / TẢI XUỐNG (PERMISSION PRE-CHECK) ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let width = area.width.saturating_sub(6) as usize;
+    let bar_str = if total_files > 0 {
+        let pct = (scanned_count as f64 / total_files as f64) * 100.0;
+        let filled = ((pct.min(100.0) * width as f64) / 100.0) as usize;
+        let empty = width.saturating_sub(filled);
+        format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
+    } else {
+        let block_size = 6.max(width / 10).min(width.saturating_sub(1));
+        let mut chars = vec!['░'; width];
+        if width > 0 {
+            let offset = scanned_count % width;
+            for i in 0..block_size {
+                let idx = (offset + i) % width;
+                chars[idx] = '█';
+            }
+        }
+        let marquee_str: String = chars.into_iter().collect();
+        format!("[{}]", marquee_str)
+    };
+
+    let scan_status_line = if total_files > 0 {
+        let pct = (scanned_count as f64 / total_files as f64) * 100.0;
+        Line::from(vec![
+            Span::styled("Đang quét: ", Style::default().fg(Color::Cyan)),
+            Span::styled(format!("{:.1}% ", pct), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("({}/{} file) ", scanned_count, total_files), Style::default().fg(Color::White)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Đang quét: ", Style::default().fg(Color::Cyan)),
+            Span::styled(format!("{} tệp tin ", scanned_count), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("(đang phân tích thư mục...) ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        ])
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Nguồn: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(src.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Đích:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(dest.to_string(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        scan_status_line,
+        Line::from(Span::styled(bar_str, Style::default().fg(Color::Green))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Phát hiện bị chặn tải: ", Style::default().fg(Color::LightRed)),
+            Span::styled(format!("{} tệp tin", restricted_count), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Nhấn [Esc] để bỏ qua và chuyển tác vụ vào hàng chờ của Job Monitor ",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
 }

@@ -6,6 +6,32 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum MonitorPane {
+    ActiveJobs,
+    PendingJobs,
+}
+
+#[derive(Debug, Clone)]
+pub struct FailedCopyItem {
+    pub src: String,
+    #[allow(dead_code)]
+    pub dest: String,
+    pub error: String,
+    pub time: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingCopyJob {
+    pub src: String,
+    pub dest: String,
+    pub is_dir: bool,
+    pub total_files: usize,
+    pub restricted_files: Vec<String>,
+    pub status: String,
+    pub items: Option<Vec<crate::ui::explorer::ClipboardItem>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransferJob {
     pub name: String,
@@ -29,6 +55,10 @@ pub struct MonitorState {
     pub selected_job_idx: usize,
     pub history: Vec<String>,
     pub confirm_stop_job: Option<TransferJob>,
+    pub failed_files: Vec<FailedCopyItem>,
+    pub pending_jobs: Vec<PendingCopyJob>,
+    pub selected_pending_idx: usize,
+    pub active_pane: MonitorPane,
 }
 
 impl MonitorState {
@@ -41,21 +71,47 @@ impl MonitorState {
             selected_job_idx: 0,
             history: Vec::new(),
             confirm_stop_job: None,
+            failed_files: Vec::new(),
+            pending_jobs: Vec::new(),
+            selected_pending_idx: 0,
+            active_pane: MonitorPane::ActiveJobs,
         }
     }
 
     pub fn next(&mut self) {
-        if !self.active_jobs.is_empty() {
-            self.selected_job_idx = (self.selected_job_idx + 1) % self.active_jobs.len();
+        match self.active_pane {
+            MonitorPane::ActiveJobs => {
+                if !self.active_jobs.is_empty() {
+                    self.selected_job_idx = (self.selected_job_idx + 1) % self.active_jobs.len();
+                }
+            }
+            MonitorPane::PendingJobs => {
+                if !self.pending_jobs.is_empty() {
+                    self.selected_pending_idx = (self.selected_pending_idx + 1) % self.pending_jobs.len();
+                }
+            }
         }
     }
 
     pub fn prev(&mut self) {
-        if !self.active_jobs.is_empty() {
-            if self.selected_job_idx == 0 {
-                self.selected_job_idx = self.active_jobs.len() - 1;
-            } else {
-                self.selected_job_idx -= 1;
+        match self.active_pane {
+            MonitorPane::ActiveJobs => {
+                if !self.active_jobs.is_empty() {
+                    if self.selected_job_idx == 0 {
+                        self.selected_job_idx = self.active_jobs.len() - 1;
+                    } else {
+                        self.selected_job_idx -= 1;
+                    }
+                }
+            }
+            MonitorPane::PendingJobs => {
+                if !self.pending_jobs.is_empty() {
+                    if self.selected_pending_idx == 0 {
+                        self.selected_pending_idx = self.pending_jobs.len() - 1;
+                    } else {
+                        self.selected_pending_idx -= 1;
+                    }
+                }
             }
         }
     }
@@ -73,11 +129,29 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5),      // Tổng quan tiến trình (Global Stats)
-            Constraint::Percentage(50), // Danh sách các tệp đang truyền tải (Active Jobs)
-            Constraint::Min(5),         // Lịch sử truyền tải (History Logs)
+            Constraint::Percentage(55), // Khung ở giữa (Active, Pending & Failed)
+            Constraint::Min(5),         // Chi tiết tác vụ đang chọn
             Constraint::Length(3),      // Help bar
         ])
         .split(area);
+
+    // Split the middle section horizontally: Left column (Active + Pending Jobs), Right column (Failed Files)
+    let mid_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(60), // Active & Pending Jobs
+            Constraint::Percentage(40), // Failed & Restricted Files
+        ])
+        .split(chunks[1]);
+
+    // Split Left column vertically: Active Jobs (60%), Pending Jobs (40%)
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(60), // Active Jobs
+            Constraint::Percentage(40), // Pending Jobs
+        ])
+        .split(mid_chunks[0]);
 
     // 1. Vẽ Tổng quan tiến trình
     let speed_str = format!("{}/s", super::format_size(state.speed as u64));
@@ -139,13 +213,16 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
     let stats_paragraph = Paragraph::new(stats_text).block(stats_block);
     frame.render_widget(stats_paragraph, chunks[0]);
 
-    // 2. Vẽ các Job đang chạy
+    // 2. Vẽ các Job đang chạy (Active Jobs)
+    let is_active_focused = state.active_pane == MonitorPane::ActiveJobs;
+    let active_border_color = if is_active_focused { Color::Yellow } else { Color::DarkGray };
+
     let active_items: Vec<ListItem> = state
         .active_jobs
         .iter()
         .enumerate()
         .map(|(i, job)| {
-            let style = if i == state.selected_job_idx {
+            let style = if is_active_focused && i == state.selected_job_idx {
                 Style::default()
                     .fg(Color::Black)
                     .bg(Color::Yellow)
@@ -155,7 +232,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
             };
 
             let line = if let Some(_id) = job.job_id {
-                let bar = make_progress_bar(job.percentage, 15);
+                let bar = make_progress_bar(job.percentage, 12);
                 let eta_str = if job.eta >= 0 {
                     format!("ETA: {}s", job.eta)
                 } else {
@@ -182,7 +259,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                             super::format_size(job.bytes),
                             super::format_size(job.size)
                         ),
-                        Style::default().fg(Color::Black),
+                        Style::default().fg(Color::DarkGray),
                     ));
                 }
 
@@ -203,7 +280,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                     "ETA: --".to_string()
                 };
 
-                let bar = make_progress_bar(job.percentage, 15);
+                let bar = make_progress_bar(job.percentage, 12);
                 Line::from(vec![
                     Span::styled(format!(" {} ", bar), Style::default().fg(Color::Green)),
                     Span::styled(
@@ -220,7 +297,7 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
                             super::format_size(job.bytes),
                             super::format_size(job.size)
                         ),
-                        Style::default().fg(Color::Black),
+                        Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(
                         format!("{} - ", eta_str),
@@ -239,15 +316,113 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
 
     let active_block = Block::default()
         .title(Span::styled(
-            crate::lang::translate("mon_active_title"),
+            format!(" {} ", crate::lang::translate("mon_active_title")),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(active_border_color)
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(active_border_color));
     let active_list = List::new(active_items).block(active_block);
-    frame.render_widget(active_list, chunks[1]);
+    frame.render_widget(active_list, left_chunks[0]);
+
+    // 3. Vẽ các tác vụ đang chờ xác nhận (Pending Jobs)
+    let is_pending_focused = state.active_pane == MonitorPane::PendingJobs;
+    let pending_border_color = if is_pending_focused { Color::Yellow } else { Color::DarkGray };
+
+    let pending_items: Vec<ListItem> = state
+        .pending_jobs
+        .iter()
+        .enumerate()
+        .map(|(i, job)| {
+            let style = if is_pending_focused && i == state.selected_pending_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let status_tag = match job.status.as_str() {
+                "Bypassed" => "[ĐÃ BỎ QUA - CẦN QUYẾT ĐỊNH]",
+                "Scanned (Has Restrictions)" => "[CÓ FILE BỊ CHẶN TẢI]",
+                "Scanned (No Restrictions)" => "[AN TOÀN - KHÔNG BỊ CHẶN]",
+                _ => "[CHỜ]",
+            };
+
+            let status_color = match job.status.as_str() {
+                "Scanned (Has Restrictions)" => Color::Red,
+                "Scanned (No Restrictions)" => Color::Green,
+                _ => Color::Yellow,
+            };
+
+            let line = Line::from(vec![
+                Span::styled("⚠️ ", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("{} ", status_tag), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} -> {} ", job.src, job.dest), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("(Bị chặn {}/{} file)", job.restricted_files.len(), job.total_files),
+                    Style::default().fg(Color::LightRed)
+                ),
+            ]);
+
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let pending_block = Block::default()
+        .title(Span::styled(
+            " TÁC VỤ SAO CHÉP CHỜ XÁC NHẬN (PENDING) ",
+            Style::default()
+                .fg(pending_border_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(pending_border_color));
+    let pending_list = List::new(pending_items).block(pending_block);
+    frame.render_widget(pending_list, left_chunks[1]);
+
+    // 4. Vẽ danh sách các file lỗi hoặc file bị hạn chế (Failed / Restricted Files)
+    let (right_panel_title, right_panel_items) = if state.active_pane == MonitorPane::PendingJobs && !state.pending_jobs.is_empty() {
+        let job = &state.pending_jobs[state.selected_pending_idx];
+        let title = format!(" FILE BỊ KHÓA CỦA JOB ĐANG CHỌN ({}) ", job.restricted_files.len());
+        let items: Vec<ListItem> = job.restricted_files.iter().map(|f| {
+            ListItem::new(Line::from(vec![
+                Span::styled("🔒 ", Style::default().fg(Color::Red)),
+                Span::styled(f.clone(), Style::default().fg(Color::White)),
+            ]))
+        }).collect();
+        (title, items)
+    } else {
+        let title = " CÁC FILE BỊ LỖI QUYỀN / KHÔNG SAO CHÉP ĐƯỢC ".to_string();
+        let items: Vec<ListItem> = state
+            .failed_files
+            .iter()
+            .map(|item| {
+                let line = Line::from(vec![
+                    Span::styled("❌ ", Style::default().fg(Color::Red)),
+                    Span::styled(format!("[{}] ", item.time), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{} ", item.src), Style::default().fg(Color::White)),
+                    Span::styled(format!("(Lỗi: {})", item.error), Style::default().fg(Color::Red)),
+                ]);
+                ListItem::new(line)
+            })
+            .collect();
+        (title, items)
+    };
+
+    let right_block = Block::default()
+        .title(Span::styled(
+            right_panel_title,
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let right_list = List::new(right_panel_items).block(right_block);
+    frame.render_widget(right_list, mid_chunks[1]);
 
     // 3. Vẽ nhật ký debug/chi tiết tác vụ đang chọn
     let details_block = Block::default()
@@ -326,8 +501,13 @@ pub fn draw(state: &MonitorState, frame: &mut Frame, area: Rect) {
     frame.render_widget(details_paragraph, chunks[2]);
 
     // Help Bar
+    let help_text = if state.active_pane == MonitorPane::PendingJobs {
+        " [Tab] Chuyển Khung | [Up/Down] Chọn | [Enter/C] Giải quyết | [Delete/D] Xóa Job | [Esc] Quay lại "
+    } else {
+        " [Tab] Chuyển Khung | [Up/Down] Chọn | [Delete/D] Dừng Job | [Esc] Quay lại "
+    };
     let help_paragraph = Paragraph::new(
-        super::parse_help_line(&crate::lang::translate("mon_help")),
+        super::parse_help_line(help_text),
     )
     .block(
         Block::default()

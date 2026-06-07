@@ -20,6 +20,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 lazy_static::lazy_static! {
     static ref RUNNING_SIZE_CHECKS: std::sync::Mutex<std::collections::HashSet<String>> = std::sync::Mutex::new(std::collections::HashSet::new());
@@ -195,11 +197,31 @@ pub enum AppEvent {
         src: String,
         dest: String,
         is_dir: bool,
+        restricted_files: Vec<String>,
     },
     PermissionCheckPassed {
         src: String,
         dest: String,
         is_dir: bool,
+    },
+    MultiPermissionErrorDetected {
+        items: Vec<ui::explorer::ClipboardItem>,
+        dest_remote: String,
+        dest_path: String,
+        restricted_files: Vec<String>,
+    },
+    MultiPermissionCheckPassed {
+        items: Vec<ui::explorer::ClipboardItem>,
+        dest_remote: String,
+        dest_path: String,
+    },
+    PermissionScanProgress {
+        src: String,
+        dest: String,
+        is_dir: bool,
+        scanned_count: usize,
+        total_files: usize,
+        restricted_count: usize,
     },
 }
 
@@ -210,6 +232,20 @@ pub enum DeleteTarget {
     FileExplorerMultiple(Vec<String>),
     Service(usize),
     SystemdService(usize),
+}
+
+struct ScanState {
+    queue: Vec<String>,
+    active_tasks: usize,
+    files: Vec<String>,
+    restricted_files: Vec<String>,
+}
+
+struct MultiScanState {
+    queue: Vec<(String, String)>,
+    active_tasks: usize,
+    files_count: usize,
+    restricted: Vec<String>,
 }
 
 pub struct App {
@@ -2046,11 +2082,10 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         pane.scroll_offset = new_len.saturating_sub(1);
                     }
                 }
-                self.explorer_state.error_message = None;
             }
             Err(e) => {
                 pane.items = Vec::new();
-                self.explorer_state.error_message = Some(e);
+                self.explorer_state.notification = Some(("LỖI EXPLORER".to_string(), e));
             }
         }
     }
@@ -2285,6 +2320,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     options,
                     selected_idx: 0,
                     actions,
+                    restricted_files: None,
+                    restricted_scroll: 0,
+                    focus_files: false,
                 };
             }
         } else if action_type == "rename" {
@@ -2364,92 +2402,207 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     options,
                     selected_idx: 0,
                     actions,
+                    restricted_files: None,
+                    restricted_scroll: 0,
+                    focus_files: false,
                 };
             }
         } else if action_type == "copy" {
             if dst_copy {
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::PermissionScanning {
+                    src: src.clone(),
+                    dest: dest.clone(),
+                    is_dir,
+                    scanned_count: 0,
+                    total_files: 0,
+                    restricted_count: 0,
+                };
                 let tx_check = tx.clone();
                 let src_clone = src.clone();
                 let dest_clone = dest.clone();
                 let is_dir_clone = is_dir;
                 tokio::spawn(async move {
-                    let test_file = if is_dir_clone {
+                    let mut restricted_files = Vec::new();
+
+                    if !is_dir_clone {
+                        // Check single file
+                        let (src_fs, filename) = parse_parent_and_child(&src_clone);
                         let list_param = json!({
-                            "fs": src_clone,
-                            "remote": "",
+                            "fs": src_fs,
+                            "remote": filename,
+                            "opt": {
+                                "recurse": false,
+                                "metadata": true
+                            }
                         }).to_string();
+
                         if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
                             if res.status == 200 {
                                 if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
                                     if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
-                                        list_arr.iter()
-                                            .find(|item| item.get("IsDir").and_then(|d| d.as_bool()) == Some(false))
-                                            .and_then(|item| item.get("Name").and_then(|n| n.as_str()).map(|n| n.to_string()))
-                                    } else {
-                                        None
+                                        for item in list_arr {
+                                            let is_restricted = if let Some(meta) = item.get("Metadata") {
+                                                meta.get("copy-requires-writer-permission")
+                                                    .and_then(|v| v.as_str())
+                                                    == Some("true")
+                                            } else {
+                                                false
+                                            };
+                                            let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                            let is_dangling = mime_type.contains("shortcut.dangling");
+
+                                            if is_restricted || is_dangling {
+                                                restricted_files.push(src_clone.clone());
+                                            }
+                                        }
                                     }
-                                } else {
-                                    None
                                 }
-                            } else {
-                                None
                             }
-                        } else {
-                            None
                         }
+                        let scanned_count = 1;
+                        // Send progress update
+                        let _ = tx_check.send(AppEvent::PermissionScanProgress {
+                            src: src_clone.clone(),
+                            dest: dest_clone.clone(),
+                            is_dir: is_dir_clone,
+                            scanned_count,
+                            total_files: 1,
+                            restricted_count: restricted_files.len(),
+                        });
                     } else {
-                        let (_, filename) = parse_parent_and_child(&src_clone);
-                        Some(filename)
-                    };
+                        // Concurrent directory walk
+                        let state = Arc::new(Mutex::new(ScanState {
+                            queue: vec!["".to_string()],
+                            active_tasks: 0,
+                            files: Vec::new(),
+                            restricted_files: Vec::new(),
+                        }));
+                        let notify = Arc::new(Notify::new());
+                        let max_concurrency = 8;
 
-                    let mut has_permission_error = false;
-                    if let Some(ref filename) = test_file {
-                        let (src_fs, _) = if is_dir_clone {
-                            (src_clone.clone(), filename.clone())
-                        } else {
-                            parse_parent_and_child(&src_clone)
-                        };
-                        let (dst_fs, _) = if is_dir_clone {
-                            (dest_clone.clone(), filename.clone())
-                        } else {
-                            parse_parent_and_child(&dest_clone)
-                        };
+                        loop {
+                            let mut to_spawn = 0;
+                            let mut finished = false;
 
-                        let test_param = json!({
-                            "srcFs": src_fs,
-                            "srcRemote": filename,
-                            "dstFs": dst_fs,
-                            "dstRemote": filename,
-                            "_config": {
-                                "DryRun": true
-                            }
-                        }).to_string();
-
-                        if let Ok(res) = rclone::rpc_async("operations/copyfile".to_string(), test_param).await {
-                            if res.status != 200 {
-                                let err_msg = res.output.to_lowercase();
-                                if err_msg.contains("restrictedlink") 
-                                    || err_msg.contains("download") 
-                                    || err_msg.contains("forbidden") 
-                                    || err_msg.contains("only the owner") 
-                                {
-                                    has_permission_error = true;
+                            {
+                                let s = state.lock().unwrap();
+                                if s.queue.is_empty() && s.active_tasks == 0 {
+                                    finished = true;
+                                } else {
+                                    let available_slots = max_concurrency - s.active_tasks;
+                                    to_spawn = available_slots.min(s.queue.len());
                                 }
                             }
+
+                            if finished {
+                                break;
+                            }
+
+                            if to_spawn == 0 {
+                                notify.notified().await;
+                                continue;
+                            }
+
+                            for _ in 0..to_spawn {
+                                let dir = {
+                                    let mut s = state.lock().unwrap();
+                                    s.active_tasks += 1;
+                                    s.queue.remove(0)
+                                };
+
+                                let state_clone = Arc::clone(&state);
+                                let notify_clone = Arc::clone(&notify);
+                                let folder_fs = src_clone.clone();
+                                let tx_progress = tx_check.clone();
+                                let src_p = src_clone.clone();
+                                let dest_p = dest_clone.clone();
+
+                                tokio::spawn(async move {
+                                    let list_param = json!({
+                                        "fs": folder_fs,
+                                        "remote": dir,
+                                        "opt": {
+                                            "recurse": false,
+                                            "metadata": true
+                                        }
+                                    }).to_string();
+
+                                    let mut new_dirs = Vec::new();
+                                    let mut new_files = Vec::new();
+                                    let mut new_restricted = Vec::new();
+
+                                    if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                                        if res.status == 200 {
+                                            if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
+                                                if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                                                    for item in list_arr {
+                                                        let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                                                        let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("");
+
+                                                        if is_item_dir {
+                                                            new_dirs.push(path.to_string());
+                                                        } else {
+                                                            new_files.push(path.to_string());
+                                                            let is_restricted = if let Some(meta) = item.get("Metadata") {
+                                                                meta.get("copy-requires-writer-permission")
+                                                                    .and_then(|v| v.as_str())
+                                                                    == Some("true")
+                                                            } else {
+                                                                false
+                                                            };
+                                                            let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                                            let is_dangling = mime_type.contains("shortcut.dangling");
+
+                                                            if is_restricted || is_dangling {
+                                                                new_restricted.push(path.to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let (current_scanned, current_restricted) = {
+                                        let mut s = state_clone.lock().unwrap();
+                                        s.queue.extend(new_dirs);
+                                        s.files.extend(new_files);
+                                        s.restricted_files.extend(new_restricted);
+                                        s.active_tasks -= 1;
+                                        (s.files.len(), s.restricted_files.len())
+                                    };
+
+                                    // Send progress update
+                                    let _ = tx_progress.send(AppEvent::PermissionScanProgress {
+                                        src: src_p,
+                                        dest: dest_p,
+                                        is_dir: true,
+                                        scanned_count: current_scanned,
+                                        total_files: 0,
+                                        restricted_count: current_restricted,
+                                    });
+
+                                    notify_clone.notify_one();
+                                });
+                            }
                         }
+
+                        let final_state = state.lock().unwrap();
+                        restricted_files = final_state.restricted_files.clone();
                     }
 
-                    if has_permission_error {
-                        let _ = tx_check.send(AppEvent::PermissionErrorDetected {
+                    if restricted_files.is_empty() {
+                        let _ = tx_check.send(AppEvent::PermissionCheckPassed {
                             src: src_clone,
                             dest: dest_clone,
                             is_dir: is_dir_clone,
                         });
                     } else {
-                        let _ = tx_check.send(AppEvent::PermissionCheckPassed {
+                        let _ = tx_check.send(AppEvent::PermissionErrorDetected {
                             src: src_clone,
                             dest: dest_clone,
                             is_dir: is_dir_clone,
+                            restricted_files,
                         });
                     }
                 });
@@ -2471,6 +2624,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     options,
                     selected_idx: 0,
                     actions,
+                    restricted_files: None,
+                    restricted_scroll: 0,
+                    focus_files: false,
                 };
             }
         }
@@ -2822,7 +2978,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 });
             }
             ui::explorer::FallbackAction::PermissionCancel => {}
-            ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible { src, dest, is_dir: _ } => {
+            ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible { src, dest, is_dir, restricted_files: _ } => {
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
                     src: src.clone(),
                     dest: dest.clone(),
@@ -2833,6 +2989,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 let src_clone = src.clone();
                 let dest_clone = dest.clone();
                 tokio::spawn(async move {
+                    if is_dir {
+                        let _ = create_all_source_directories(&src_clone, &dest_clone).await;
+                    }
                     let res = run_rpc_job_async_with_progress(
                         "sync/copy".to_string(),
                         serde_json::json!({
@@ -2842,14 +3001,29 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         Some((src_clone, dest_clone, true)),
                         Some(tx_copy.clone()),
                     ).await;
+                    let result = match res {
+                        Ok(()) => Ok(()),
+                        Err(e) => {
+                            let err_lower = e.to_lowercase();
+                            if err_lower.contains("restrictedlink")
+                                || err_lower.contains("download")
+                                || err_lower.contains("forbidden")
+                                || err_lower.contains("only the owner")
+                            {
+                                Ok(())
+                            } else {
+                                Err(e)
+                            }
+                        }
+                    };
                     let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                         pane: ui::explorer::ActivePane::Left,
                         op_name: "sao chép nhiều nhất có thể (copy)".to_string(),
-                        result: res,
+                        result,
                     });
                 });
             }
-            ui::explorer::FallbackAction::PermissionRestrictedCopy { src, dest, is_dir } => {
+            ui::explorer::FallbackAction::PermissionRestrictedCopy { src, dest, is_dir, restricted_files: _ } => {
                 self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
                     src: src.clone(),
                     dest: dest.clone(),
@@ -2865,6 +3039,180 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         pane: ui::explorer::ActivePane::Left,
                         op_name: "sao chép hạn chế (restricted copy)".to_string(),
                         result: res,
+                    });
+                });
+            }
+            ui::explorer::FallbackAction::MultiPermissionCopyAsMuchAsPossible { items, dest_remote, dest_path, restricted_files: _ } => {
+                let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                    src: format!("({} mục)", items.len()),
+                    dest: dest_full.clone(),
+                    pct: 0.0,
+                    job_id: None,
+                };
+                let tx_op = tx.clone();
+                let dest_remote_clone = dest_remote.clone();
+                let dest_path_clone = dest_path.clone();
+                let items_clone = items.clone();
+                let pane_type = self.explorer_state.active_pane.clone();
+                tokio::spawn(async move {
+                    let total = items_clone.len();
+                    let mut last_err = None;
+                    for (idx, clip_item) in items_clone.iter().enumerate() {
+                        let src = if clip_item.remote.is_empty() {
+                            PathBuf::from(&clip_item.path)
+                                .join(&clip_item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            let clean_remote = clip_item.remote.trim_end_matches(':');
+                            let clean_path = if clip_item.path.starts_with('/') {
+                                clip_item.path.clone()
+                            } else {
+                                format!("/{}", clip_item.path)
+                            };
+                            let clean_path = if clean_path.ends_with('/') {
+                                format!("{}{}", clean_path, clip_item.name)
+                            } else {
+                                format!("{}/{}", clean_path, clip_item.name)
+                            };
+                            format!("{}:{}", clean_remote, clean_path)
+                        };
+                        let dest = if dest_remote_clone.is_empty() {
+                            PathBuf::from(&dest_path_clone)
+                                .join(&clip_item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            format!("{}:{}/{}", dest_remote_clone.trim_end_matches(':'), dest_path_clone.trim_start_matches('/'), clip_item.name)
+                        };
+
+                        let pct = ((idx as f64) / total as f64) * 100.0;
+                        let _ = tx_op.send(AppEvent::CopyProgress {
+                            src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
+                            dest: dest.clone(),
+                            pct,
+                            job_id: None,
+                        });
+
+                        let method = if clip_item.is_dir {
+                            "sync/copy"
+                        } else {
+                            "operations/copyfile"
+                        };
+                        let param = if clip_item.is_dir {
+                            json!({ "srcFs": src, "dstFs": dest })
+                        } else {
+                            json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": clip_item.name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": clip_item.name })
+                        };
+
+                        if clip_item.is_dir {
+                            let _ = create_all_source_directories(&src, &dest).await;
+                        }
+
+                        let res = run_rpc_job_async(method.to_string(), param).await;
+                        if let Err(e) = res {
+                            let err_lower = e.to_lowercase();
+                            if err_lower.contains("restrictedlink")
+                                || err_lower.contains("download")
+                                || err_lower.contains("forbidden")
+                                || err_lower.contains("only the owner")
+                            {
+                                // Bỏ qua lỗi do file bị hạn chế download
+                            } else {
+                                last_err = Some(e);
+                            }
+                        }
+                    }
+                    let _ = tx_op.send(AppEvent::CopyProgress {
+                        src: format!("({} mục)", total),
+                        dest: String::new(),
+                        pct: 100.0,
+                        job_id: None,
+                    });
+                    let result = match last_err {
+                        None => Ok(()),
+                        Some(e) => Err(e),
+                    };
+                    let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                        pane: pane_type,
+                        op_name: "sao chép nhiều mục".to_string(),
+                        result,
+                    });
+                });
+            }
+            ui::explorer::FallbackAction::MultiPermissionRestrictedCopy { items, dest_remote, dest_path, restricted_files: _ } => {
+                let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                    src: format!("({} mục)", items.len()),
+                    dest: dest_full.clone(),
+                    pct: 0.0,
+                    job_id: None,
+                };
+                let tx_op = tx.clone();
+                let dest_remote_clone = dest_remote.clone();
+                let dest_path_clone = dest_path.clone();
+                let items_clone = items.clone();
+                let pane_type = self.explorer_state.active_pane.clone();
+                tokio::spawn(async move {
+                    let total = items_clone.len();
+                    let mut last_err = None;
+                    for (idx, clip_item) in items_clone.iter().enumerate() {
+                        let src = if clip_item.remote.is_empty() {
+                            PathBuf::from(&clip_item.path)
+                                .join(&clip_item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            let clean_remote = clip_item.remote.trim_end_matches(':');
+                            let clean_path = if clip_item.path.starts_with('/') {
+                                clip_item.path.clone()
+                            } else {
+                                format!("/{}", clip_item.path)
+                            };
+                            let clean_path = if clean_path.ends_with('/') {
+                                format!("{}{}", clean_path, clip_item.name)
+                            } else {
+                                format!("{}/{}", clean_path, clip_item.name)
+                            };
+                            format!("{}:{}", clean_remote, clean_path)
+                        };
+                        let dest = if dest_remote_clone.is_empty() {
+                            PathBuf::from(&dest_path_clone)
+                                .join(&clip_item.name)
+                                .to_string_lossy()
+                                .to_string()
+                        } else {
+                            format!("{}:{}/{}", dest_remote_clone.trim_end_matches(':'), dest_path_clone.trim_start_matches('/'), clip_item.name)
+                        };
+
+                        let pct = ((idx as f64) / total as f64) * 100.0;
+                        let _ = tx_op.send(AppEvent::CopyProgress {
+                            src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
+                            dest: dest.clone(),
+                            pct,
+                            job_id: None,
+                        });
+
+                        let res = execute_restricted_copy(src, dest, clip_item.is_dir, tx_op.clone()).await;
+                        if let Err(e) = res {
+                            last_err = Some(e);
+                        }
+                    }
+                    let _ = tx_op.send(AppEvent::CopyProgress {
+                        src: format!("({} mục)", total),
+                        dest: String::new(),
+                        pct: 100.0,
+                        job_id: None,
+                    });
+                    let result = match last_err {
+                        None => Ok(()),
+                        Some(e) => Err(e),
+                    };
+                    let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                        pane: pane_type,
+                        op_name: "sao chép hạn chế nhiều mục".to_string(),
+                        result,
                     });
                 });
             }
@@ -3486,9 +3834,16 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                             Ok(_) => {
                                 self.refresh_explorer_pane(ui::explorer::ActivePane::Left, tx.clone()).await;
                                 self.refresh_explorer_pane(ui::explorer::ActivePane::Right, tx.clone()).await;
+                                self.explorer_state.notification = Some((
+                                    "THÀNH CÔNG".to_string(),
+                                    format!("Tác vụ '{}' hoàn tất thành công!", op_name),
+                                ));
                             }
                             Err(e) => {
-                                self.explorer_state.error_message = Some(format!("Lỗi khi thực hiện {}: {}", op_name, e));
+                                self.explorer_state.notification = Some((
+                                    "LỖI TÁC VỤ".to_string(),
+                                    format!("Lỗi khi thực hiện {}: {}", op_name, e),
+                                ));
                             }
                         }
                     }
@@ -3512,7 +3867,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 };
                             }
                             Err(e) => {
-                                self.explorer_state.error_message = Some(format!("Lỗi đọc file: {}", e));
+                                self.explorer_state.notification = Some(("LỖI ĐỌC FILE".to_string(), format!("Lỗi đọc file: {}", e)));
                             }
                         }
                     }
@@ -3530,7 +3885,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 }
                                 Err(e) => {
                                     *items = Vec::new();
-                                    self.explorer_state.error_message = Some(format!("Lỗi tải thư mục: {}", e));
+                                    self.explorer_state.notification = Some(("LỖI TẢI THƯ MỤC".to_string(), format!("Lỗi tải thư mục: {}", e)));
                                 }
                             }
                         }
@@ -3564,64 +3919,231 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                 };
                             }
                             Err(e) => {
-                                self.explorer_state.error_message = Some(e);
+                                self.explorer_state.notification = Some(("LỖI GIẢI MÃ CRYPT".to_string(), e));
                             }
                         }
                     }
-                    AppEvent::PermissionErrorDetected { src, dest, is_dir } => {
-                        let mut options = Vec::new();
-                        let mut actions = Vec::new();
+                    AppEvent::PermissionScanProgress { src, dest, is_dir, scanned_count, total_files, restricted_count } => {
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::PermissionScanning {
+                                src,
+                                dest,
+                                is_dir,
+                                scanned_count,
+                                total_files,
+                                restricted_count,
+                            };
+                        }
+                    }
+                    AppEvent::PermissionErrorDetected { src, dest, is_dir, restricted_files } => {
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                            let mut options = Vec::new();
+                            let mut actions = Vec::new();
 
-                        options.push(crate::lang::translate("exp_permission_option_cancel"));
-                        actions.push(ui::explorer::FallbackAction::PermissionCancel);
+                            options.push(crate::lang::translate("exp_permission_option_cancel"));
+                            actions.push(ui::explorer::FallbackAction::PermissionCancel);
 
-                        options.push(crate::lang::translate("exp_permission_option_as_much"));
-                        actions.push(ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible {
-                            src: src.clone(),
-                            dest: dest.clone(),
-                            is_dir,
-                        });
+                            options.push(crate::lang::translate("exp_permission_option_as_much"));
+                            actions.push(ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible {
+                                src: src.clone(),
+                                dest: dest.clone(),
+                                is_dir,
+                                restricted_files: restricted_files.clone(),
+                            });
 
-                        options.push(crate::lang::translate("exp_permission_option_restricted"));
-                        actions.push(ui::explorer::FallbackAction::PermissionRestrictedCopy {
-                            src: src.clone(),
-                            dest: dest.clone(),
-                            is_dir,
-                        });
+                            options.push(crate::lang::translate("exp_permission_option_restricted"));
+                            actions.push(ui::explorer::FallbackAction::PermissionRestrictedCopy {
+                                src: src.clone(),
+                                dest: dest.clone(),
+                                is_dir,
+                                restricted_files: restricted_files.clone(),
+                            });
 
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
-                            title: crate::lang::translate("exp_permission_error_title").to_string(),
-                            options,
-                            selected_idx: 0,
-                            actions,
-                        };
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
+                                title: crate::lang::translate("exp_permission_error_title").to_string(),
+                                options,
+                                selected_idx: 0,
+                                actions,
+                                restricted_files: Some(restricted_files),
+                                restricted_scroll: 0,
+                                focus_files: false,
+                            };
+                        } else {
+                            if let Some(job) = self.monitor_state.pending_jobs.iter_mut().find(|j| j.src == src && j.dest == dest) {
+                                job.restricted_files = restricted_files;
+                                job.status = "Scanned (Has Restrictions)".to_string();
+                            }
+                        }
                     }
                     AppEvent::PermissionCheckPassed { src, dest, is_dir: _ } => {
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
-                            src: src.clone(),
-                            dest: dest.clone(),
-                            pct: 0.0,
-                            job_id: None,
-                        };
-                        let tx_copy = tx.clone();
-                        let src_clone = src.clone();
-                        let dest_clone = dest.clone();
-                        tokio::spawn(async move {
-                            let res = run_rpc_job_async_with_progress(
-                                "sync/copy".to_string(),
-                                json!({
-                                    "srcFs": src_clone,
-                                    "dstFs": dest_clone,
-                                }),
-                                Some((src_clone, dest_clone, true)),
-                                Some(tx_copy.clone()),
-                            ).await;
-                            let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
-                                pane: ui::explorer::ActivePane::Left,
-                                op_name: "sao chép (copy)".to_string(),
-                                result: res,
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                                src: src.clone(),
+                                dest: dest.clone(),
+                                pct: 0.0,
+                                job_id: None,
+                            };
+                            let tx_copy = tx.clone();
+                            let src_clone = src.clone();
+                            let dest_clone = dest.clone();
+                            tokio::spawn(async move {
+                                let res = run_rpc_job_async_with_progress(
+                                    "sync/copy".to_string(),
+                                    json!({
+                                        "srcFs": src_clone,
+                                        "dstFs": dest_clone,
+                                    }),
+                                    Some((src_clone, dest_clone, true)),
+                                    Some(tx_copy.clone()),
+                                ).await;
+                                let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
+                                    pane: ui::explorer::ActivePane::Left,
+                                    op_name: "sao chép (copy)".to_string(),
+                                    result: res,
+                                });
                             });
-                        });
+                        } else {
+                            if let Some(job) = self.monitor_state.pending_jobs.iter_mut().find(|j| j.src == src && j.dest == dest) {
+                                job.status = "Scanned (No Restrictions)".to_string();
+                            }
+                        }
+                    }
+                    AppEvent::MultiPermissionErrorDetected { items, dest_remote, dest_path, restricted_files } => {
+                        let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                            let mut options = Vec::new();
+                            let mut actions = Vec::new();
+
+                            options.push(crate::lang::translate("exp_permission_option_cancel"));
+                            actions.push(ui::explorer::FallbackAction::PermissionCancel);
+
+                            options.push(crate::lang::translate("exp_permission_option_as_much"));
+                            actions.push(ui::explorer::FallbackAction::MultiPermissionCopyAsMuchAsPossible {
+                                items: items.clone(),
+                                dest_remote: dest_remote.clone(),
+                                dest_path: dest_path.clone(),
+                                restricted_files: restricted_files.clone(),
+                            });
+
+                            options.push(crate::lang::translate("exp_permission_option_restricted"));
+                            actions.push(ui::explorer::FallbackAction::MultiPermissionRestrictedCopy {
+                                items: items.clone(),
+                                dest_remote: dest_remote.clone(),
+                                dest_path: dest_path.clone(),
+                                restricted_files: restricted_files.clone(),
+                            });
+
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
+                                title: crate::lang::translate("exp_permission_error_title").to_string(),
+                                options,
+                                selected_idx: 0,
+                                actions,
+                                restricted_files: Some(restricted_files),
+                                restricted_scroll: 0,
+                                focus_files: false,
+                            };
+                        } else {
+                            let src_full = format!("({} mục)", items.len());
+                            if let Some(job) = self.monitor_state.pending_jobs.iter_mut().find(|j| j.src == src_full && j.dest == dest_full) {
+                                job.restricted_files = restricted_files;
+                                job.status = "Scanned (Has Restrictions)".to_string();
+                            }
+                        }
+                    }
+                    AppEvent::MultiPermissionCheckPassed { items, dest_remote, dest_path } => {
+                        let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                            let dest_remote_clone = dest_remote.clone();
+                            let dest_path_clone = dest_path.clone();
+                            let items_clone = items.clone();
+                            let tx_op = tx.clone();
+                            let pane_type = self.explorer_state.active_pane.clone();
+
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                                src: format!("({} mục)", items_clone.len()),
+                                dest: dest_full.clone(),
+                                pct: 0.0,
+                                job_id: None,
+                            };
+
+                            tokio::spawn(async move {
+                                let total = items_clone.len();
+                                let mut last_err = None;
+                                for (idx, clip_item) in items_clone.iter().enumerate() {
+                                    let src = if clip_item.remote.is_empty() {
+                                        PathBuf::from(&clip_item.path)
+                                            .join(&clip_item.name)
+                                            .to_string_lossy()
+                                            .to_string()
+                                    } else {
+                                        let clean_remote = clip_item.remote.trim_end_matches(':');
+                                        let clean_path = if clip_item.path.starts_with('/') {
+                                            clip_item.path.clone()
+                                        } else {
+                                            format!("/{}", clip_item.path)
+                                        };
+                                        let clean_path = if clean_path.ends_with('/') {
+                                            format!("{}{}", clean_path, clip_item.name)
+                                        } else {
+                                            format!("{}/{}", clean_path, clip_item.name)
+                                        };
+                                        format!("{}:{}", clean_remote, clean_path)
+                                    };
+                                    let dest = if dest_remote_clone.is_empty() {
+                                        PathBuf::from(&dest_path_clone)
+                                            .join(&clip_item.name)
+                                            .to_string_lossy()
+                                            .to_string()
+                                    } else {
+                                        format!("{}:{}/{}", dest_remote_clone.trim_end_matches(':'), dest_path_clone.trim_start_matches('/'), clip_item.name)
+                                    };
+
+                                    let pct = ((idx as f64) / total as f64) * 100.0;
+                                    let _ = tx_op.send(AppEvent::CopyProgress {
+                                        src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
+                                        dest: dest.clone(),
+                                        pct,
+                                        job_id: None,
+                                    });
+
+                                    let method = if clip_item.is_dir {
+                                        "sync/copy"
+                                    } else {
+                                        "operations/copyfile"
+                                    };
+                                    let param = if clip_item.is_dir {
+                                        json!({ "srcFs": src, "dstFs": dest })
+                                    } else {
+                                        json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": clip_item.name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": clip_item.name })
+                                    };
+
+                                    let res = run_rpc_job_async(method.to_string(), param).await;
+                                    if let Err(e) = res {
+                                        last_err = Some(e);
+                                    }
+                                }
+                                let _ = tx_op.send(AppEvent::CopyProgress {
+                                    src: format!("({} mục)", total),
+                                    dest: String::new(),
+                                    pct: 100.0,
+                                    job_id: None,
+                                });
+                                let result = match last_err {
+                                    None => Ok(()),
+                                    Some(e) => Err(e),
+                                };
+                                let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                                    pane: pane_type,
+                                    op_name: "sao chép nhiều mục".to_string(),
+                                    result,
+                                });
+                            });
+                        } else {
+                            let src_full = format!("({} mục)", items.len());
+                            if let Some(job) = self.monitor_state.pending_jobs.iter_mut().find(|j| j.src == src_full && j.dest == dest_full) {
+                                job.status = "Scanned (No Restrictions)".to_string();
+                            }
+                        }
                     }
                 }
             }
@@ -4146,30 +4668,23 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
             return;
         }
 
-        // ESC hủy popups thông báo chung
-        if key.code == KeyCode::Esc {
-            if self.connection_state.error_message.is_some()
-                || self.connection_state.info_message.is_some()
-            {
+        // ESC hủy popups thông báo chung (chặn tất cả phím khác khi đang hiện thông báo)
+        if self.connection_state.error_message.is_some()
+            || self.connection_state.info_message.is_some()
+            || self.explorer_state.notification.is_some()
+            || self.profile_state.error_message.is_some()
+            || self.services_state.error_message.is_some()
+            || self.services_state.info_message.is_some()
+        {
+            if key.code == KeyCode::Esc {
                 self.connection_state.error_message = None;
                 self.connection_state.info_message = None;
-                return;
-            }
-            if self.explorer_state.error_message.is_some() {
-                self.explorer_state.error_message = None;
-                return;
-            }
-            if self.profile_state.error_message.is_some() {
+                self.explorer_state.notification = None;
                 self.profile_state.error_message = None;
-                return;
-            }
-            if self.services_state.error_message.is_some()
-                || self.services_state.info_message.is_some()
-            {
                 self.services_state.error_message = None;
                 self.services_state.info_message = None;
-                return;
             }
+            return;
         }
 
         match self.screen {
@@ -6217,39 +6732,116 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                     options,
                     mut selected_idx,
                     actions,
+                    restricted_files,
+                    mut restricted_scroll,
+                    mut focus_files,
                 } => {
                     if (key.code == KeyCode::Char('c') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL))
                         || key.code == KeyCode::Esc
                     {
+                        if let Some(ref files) = restricted_files {
+                            let mut src = String::new();
+                            let mut dest = String::new();
+                            let mut is_dir = false;
+                            let mut items = None;
+
+                            for act in &actions {
+                                match act {
+                                    ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible { src: s, dest: d, is_dir: id, .. } => {
+                                        src = s.clone();
+                                        dest = d.clone();
+                                        is_dir = *id;
+                                        break;
+                                    }
+                                    ui::explorer::FallbackAction::MultiPermissionCopyAsMuchAsPossible { items: its, dest_remote, dest_path, .. } => {
+                                        src = format!("({} mục)", its.len());
+                                        dest = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
+                                        is_dir = true;
+                                        items = Some(its.clone());
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if !src.is_empty() {
+                                self.monitor_state.pending_jobs.push(ui::monitor::PendingCopyJob {
+                                    src,
+                                    dest,
+                                    is_dir,
+                                    total_files: 0,
+                                    restricted_files: files.clone(),
+                                    status: "Scanned (Has Restrictions)".to_string(),
+                                    items,
+                                });
+                                self.monitor_state.history.push("Đã chuyển tác vụ có file restricted vào hàng chờ".to_string());
+                            }
+                        }
                         self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                     } else {
                         match key.code {
+                            KeyCode::Tab => {
+                                if restricted_files.is_some() {
+                                    focus_files = !focus_files;
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
+                                        title,
+                                        options,
+                                        selected_idx,
+                                        actions,
+                                        restricted_files,
+                                        restricted_scroll,
+                                        focus_files,
+                                    };
+                                }
+                            }
                             KeyCode::Up => {
-                                if selected_idx == 0 {
-                                    selected_idx = options.len() - 1;
+                                if focus_files {
+                                    if restricted_scroll > 0 {
+                                        restricted_scroll -= 1;
+                                    }
                                 } else {
-                                    selected_idx -= 1;
+                                    if selected_idx == 0 {
+                                        selected_idx = options.len() - 1;
+                                    } else {
+                                        selected_idx -= 1;
+                                    }
                                 }
                                 self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
                                     title,
                                     options,
                                     selected_idx,
                                     actions,
+                                    restricted_files,
+                                    restricted_scroll,
+                                    focus_files,
                                 };
                             }
                             KeyCode::Down => {
-                                selected_idx = (selected_idx + 1) % options.len();
+                                if focus_files {
+                                    if let Some(ref files) = restricted_files {
+                                        if restricted_scroll + 1 < files.len() {
+                                            restricted_scroll += 1;
+                                        }
+                                    }
+                                } else {
+                                    selected_idx = (selected_idx + 1) % options.len();
+                                }
                                 self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
                                     title,
                                     options,
                                     selected_idx,
                                     actions,
+                                    restricted_files,
+                                    restricted_scroll,
+                                    focus_files,
                                 };
                             }
                             KeyCode::Enter => {
-                                let selected_action = actions[selected_idx].clone();
-                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                                self.execute_fallback_action(selected_action, tx.clone()).await;
+                                if !focus_files {
+                                    let selected_action = actions[selected_idx].clone();
+                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                                    self.execute_fallback_action(selected_action, tx.clone()).await;
+                                }
                             }
                             _ => {}
                         }
@@ -6654,7 +7246,7 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                                     }
 
                                     if drive_remotes.is_empty() {
-                                        self.explorer_state.error_message = Some("Không tìm thấy remote Google Drive nào được cấu hình trong hệ thống làm base credentials!".to_string());
+                                        self.explorer_state.notification = Some(("CẢNH BÁO".to_string(), "Không tìm thấy remote Google Drive nào được cấu hình trong hệ thống làm base credentials!".to_string()));
                                         self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                                     } else {
                                         self.explorer_state.popup = ui::explorer::ExplorerPopup::SelectBaseRemote {
@@ -7077,81 +7669,271 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 // Ctrl+V: Dán (hỗ trợ multi-select)
                 if let Some(ref items) = self.explorer_state.clipboard_items {
                     if !items.is_empty() {
-                        // Multi-paste: Sao chép tuần tự tất cả các mục, bỏ qua popup đổi tên
                         let dest_pane = self.explorer_state.get_active_pane();
                         let dest_remote = dest_pane.remote.clone();
                         let dest_path = dest_pane.path.clone();
-                        let items_clone = items.clone();
-                        let tx_op = tx.clone();
-                        let pane_type = self.explorer_state.active_pane.clone();
 
-                        self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
-                            src: format!("({} mục)", items_clone.len()),
+                        self.explorer_state.popup = ui::explorer::ExplorerPopup::PermissionScanning {
+                            src: format!("({} mục)", items.len()),
                             dest: if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) },
-                            pct: 0.0,
-                            job_id: None,
+                            is_dir: true,
+                            scanned_count: 0,
+                            total_files: 0,
+                            restricted_count: 0,
                         };
 
+                        let tx_check = tx.clone();
+                        let items_clone = items.clone();
+                        let dest_remote_clone = dest_remote.clone();
+                        let dest_path_clone = dest_path.clone();
+
                         tokio::spawn(async move {
-                            let total = items_clone.len();
-                            let mut last_err = None;
-                            for (idx, clip_item) in items_clone.iter().enumerate() {
+                            let mut scanned_count = 0;
+                            let mut restricted_files = Vec::new();
+
+                            let mut dirs_to_walk = Vec::new();
+                            let mut files_to_check = Vec::new();
+
+                            for clip_item in &items_clone {
                                 let src = if clip_item.remote.is_empty() {
                                     PathBuf::from(&clip_item.path)
                                         .join(&clip_item.name)
                                         .to_string_lossy()
                                         .to_string()
                                 } else {
-                                    format!("{}:{}/{}", clip_item.remote.trim_end_matches(':'), clip_item.path.trim_start_matches('/'), clip_item.name)
-                                };
-                                let dest = if dest_remote.is_empty() {
-                                    PathBuf::from(&dest_path)
-                                        .join(&clip_item.name)
-                                        .to_string_lossy()
-                                        .to_string()
-                                } else {
-                                    format!("{}:{}/{}", dest_remote.trim_end_matches(':'), dest_path.trim_start_matches('/'), clip_item.name)
-                                };
-
-                                let pct = ((idx as f64) / total as f64) * 100.0;
-                                let _ = tx_op.send(AppEvent::CopyProgress {
-                                    src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
-                                    dest: dest.clone(),
-                                    pct,
-                                    job_id: None,
-                                });
-
-                                let method = if clip_item.is_dir {
-                                    "sync/copy"
-                                } else {
-                                    "operations/copyfile"
-                                };
-                                let param = if clip_item.is_dir {
-                                    json!({ "srcFs": src, "dstFs": dest })
-                                } else {
-                                    json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": clip_item.name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": clip_item.name })
+                                    let clean_remote = clip_item.remote.trim_end_matches(':');
+                                    let clean_path = if clip_item.path.starts_with('/') {
+                                        clip_item.path.clone()
+                                    } else {
+                                        format!("/{}", clip_item.path)
+                                    };
+                                    let clean_path = if clean_path.ends_with('/') {
+                                        format!("{}{}", clean_path, clip_item.name)
+                                    } else {
+                                        format!("{}/{}", clean_path, clip_item.name)
+                                    };
+                                    format!("{}:{}", clean_remote, clean_path)
                                 };
 
-                                let res = run_rpc_job_async(method.to_string(), param).await;
-                                if let Err(e) = res {
-                                    last_err = Some(e);
+                                if clip_item.is_dir {
+                                    dirs_to_walk.push(src);
+                                } else {
+                                    files_to_check.push((src, clip_item.name.clone()));
                                 }
                             }
-                            let _ = tx_op.send(AppEvent::CopyProgress {
-                                src: format!("({} mục)", total),
-                                dest: String::new(),
-                                pct: 100.0,
-                                job_id: None,
+
+                            let files_state = Arc::new(Mutex::new(restricted_files));
+                            let mut file_tasks = Vec::new();
+
+                            for (src_file, _) in files_to_check {
+                                let files_state_clone = Arc::clone(&files_state);
+
+                                let task = tokio::spawn(async move {
+                                    let (src_fs, fname) = parse_parent_and_child(&src_file);
+                                    let list_param = json!({
+                                        "fs": src_fs,
+                                        "remote": fname,
+                                        "opt": {
+                                            "recurse": false,
+                                            "metadata": true
+                                        }
+                                    }).to_string();
+
+                                    let mut is_rest = false;
+                                    if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                                        if res.status == 200 {
+                                            if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
+                                                if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                                                    for item in list_arr {
+                                                        let is_restricted = if let Some(meta) = item.get("Metadata") {
+                                                            meta.get("copy-requires-writer-permission")
+                                                                .and_then(|v| v.as_str())
+                                                                == Some("true")
+                                                        } else {
+                                                            false
+                                                        };
+                                                        let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                                        let is_dangling = mime_type.contains("shortcut.dangling");
+
+                                                        if is_restricted || is_dangling {
+                                                            is_rest = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if is_rest {
+                                        let mut s = files_state_clone.lock().unwrap();
+                                        s.push(src_file.clone());
+                                    }
+                                });
+                                file_tasks.push(task);
+                            }
+
+                            for task in file_tasks {
+                                let _ = task.await;
+                            }
+
+                            restricted_files = Arc::try_unwrap(files_state).unwrap().into_inner().unwrap();
+                            scanned_count += items_clone.len() - dirs_to_walk.len();
+
+                            let _ = tx_check.send(AppEvent::PermissionScanProgress {
+                                src: format!("({} mục)", items_clone.len()),
+                                dest: if dest_remote_clone.is_empty() { dest_path_clone.clone() } else { format!("{}:{}", dest_remote_clone, dest_path_clone) },
+                                is_dir: true,
+                                scanned_count,
+                                total_files: 0,
+                                restricted_count: restricted_files.len(),
                             });
-                            let result = match last_err {
-                                None => Ok(()),
-                                Some(e) => Err(e),
-                            };
-                            let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
-                                pane: pane_type,
-                                op_name: "sao chép nhiều mục".to_string(),
-                                result,
-                            });
+
+                            if !dirs_to_walk.is_empty() {
+                                let mut initial_queue = Vec::new();
+                                for dir_fs in dirs_to_walk {
+                                    initial_queue.push((dir_fs, "".to_string()));
+                                }
+
+                                let state = Arc::new(Mutex::new(MultiScanState {
+                                    queue: initial_queue,
+                                    active_tasks: 0,
+                                    files_count: 0,
+                                    restricted: restricted_files,
+                                }));
+
+                                let notify = Arc::new(Notify::new());
+                                let max_concurrency = 8;
+
+                                loop {
+                                    let mut to_spawn = 0;
+                                    let mut finished = false;
+
+                                    {
+                                        let s = state.lock().unwrap();
+                                        if s.queue.is_empty() && s.active_tasks == 0 {
+                                            finished = true;
+                                        } else {
+                                            let available_slots = max_concurrency - s.active_tasks;
+                                            to_spawn = available_slots.min(s.queue.len());
+                                        }
+                                    }
+
+                                    if finished {
+                                        break;
+                                    }
+
+                                    if to_spawn == 0 {
+                                        notify.notified().await;
+                                        continue;
+                                    }
+
+                                    for _ in 0..to_spawn {
+                                        let (fs_root, dir_rel) = {
+                                            let mut s = state.lock().unwrap();
+                                            s.active_tasks += 1;
+                                            s.queue.remove(0)
+                                        };
+
+                                        let state_clone = Arc::clone(&state);
+                                        let notify_clone = Arc::clone(&notify);
+                                        let tx_progress = tx_check.clone();
+                                        let items_len = items_clone.len();
+                                        let dest_r_c = dest_remote_clone.clone();
+                                        let dest_p_c = dest_path_clone.clone();
+                                        let scanned_base = scanned_count;
+
+                                        tokio::spawn(async move {
+                                            let list_param = json!({
+                                                "fs": fs_root,
+                                                "remote": dir_rel,
+                                                "opt": {
+                                                    "recurse": false,
+                                                    "metadata": true
+                                                }
+                                            }).to_string();
+
+                                            let mut new_dirs = Vec::new();
+                                            let mut new_files_count = 0;
+                                            let mut new_restricted = Vec::new();
+
+                                            if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                                                if res.status == 200 {
+                                                    if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
+                                                        if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                                                            for item in list_arr {
+                                                                let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                                                                let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("");
+
+                                                                if is_item_dir {
+                                                                    new_dirs.push((fs_root.clone(), path.to_string()));
+                                                                } else {
+                                                                    new_files_count += 1;
+                                                                    let is_restricted = if let Some(meta) = item.get("Metadata") {
+                                                                        meta.get("copy-requires-writer-permission")
+                                                                            .and_then(|v| v.as_str())
+                                                                            == Some("true")
+                                                                    } else {
+                                                                        false
+                                                                    };
+                                                                    let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                                                    let is_dangling = mime_type.contains("shortcut.dangling");
+
+                                                                    if is_restricted || is_dangling {
+                                                                        let full_item_path = if dir_rel.is_empty() {
+                                                                            format!("{}/{}", fs_root, path)
+                                                                        } else {
+                                                                            format!("{}/{}/{}", fs_root, dir_rel, path)
+                                                                        };
+                                                                        new_restricted.push(full_item_path);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            let (current_scanned, current_restricted) = {
+                                                let mut s = state_clone.lock().unwrap();
+                                                s.queue.extend(new_dirs);
+                                                s.files_count += new_files_count;
+                                                s.restricted.extend(new_restricted);
+                                                s.active_tasks -= 1;
+                                                (s.files_count, s.restricted.clone())
+                                            };
+
+                                            let _ = tx_progress.send(AppEvent::PermissionScanProgress {
+                                                src: format!("({} mục)", items_len),
+                                                dest: if dest_r_c.is_empty() { dest_p_c.clone() } else { format!("{}:{}", dest_r_c, dest_p_c) },
+                                                is_dir: true,
+                                                scanned_count: scanned_base + current_scanned,
+                                                total_files: 0,
+                                                restricted_count: current_restricted.len(),
+                                            });
+
+                                            notify_clone.notify_one();
+                                        });
+                                    }
+                                }
+
+                                let final_state = state.lock().unwrap();
+                                restricted_files = final_state.restricted.clone();
+                            }
+
+                            if restricted_files.is_empty() {
+                                let _ = tx_check.send(AppEvent::MultiPermissionCheckPassed {
+                                    items: items_clone,
+                                    dest_remote: dest_remote_clone,
+                                    dest_path: dest_path_clone,
+                                });
+                            } else {
+                                let _ = tx_check.send(AppEvent::MultiPermissionErrorDetected {
+                                    items: items_clone,
+                                    dest_remote: dest_remote_clone,
+                                    dest_path: dest_path_clone,
+                                    restricted_files,
+                                });
+                            }
                         });
                     }
                 } else if let Some(ref clipboard_item) = self.explorer_state.clipboard {
@@ -7338,13 +8120,103 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                 KeyCode::Esc => {
                     self.screen = Screen::MainMenu;
                 }
+                KeyCode::Tab => {
+                    self.monitor_state.active_pane = match self.monitor_state.active_pane {
+                        ui::monitor::MonitorPane::ActiveJobs => ui::monitor::MonitorPane::PendingJobs,
+                        ui::monitor::MonitorPane::PendingJobs => ui::monitor::MonitorPane::ActiveJobs,
+                    };
+                }
                 KeyCode::Up => self.monitor_state.prev(),
                 KeyCode::Down => self.monitor_state.next(),
-                KeyCode::Delete => {
-                    if !self.monitor_state.active_jobs.is_empty() {
-                        if self.monitor_state.selected_job_idx < self.monitor_state.active_jobs.len() {
-                            let job = self.monitor_state.active_jobs[self.monitor_state.selected_job_idx].clone();
-                            self.monitor_state.confirm_stop_job = Some(job);
+                KeyCode::Delete | KeyCode::Char('d') | KeyCode::Char('D') => {
+                    match self.monitor_state.active_pane {
+                        ui::monitor::MonitorPane::ActiveJobs => {
+                            if !self.monitor_state.active_jobs.is_empty() {
+                                if self.monitor_state.selected_job_idx < self.monitor_state.active_jobs.len() {
+                                    let job = self.monitor_state.active_jobs[self.monitor_state.selected_job_idx].clone();
+                                    self.monitor_state.confirm_stop_job = Some(job);
+                                }
+                            }
+                        }
+                        ui::monitor::MonitorPane::PendingJobs => {
+                            if !self.monitor_state.pending_jobs.is_empty() {
+                                if self.monitor_state.selected_pending_idx < self.monitor_state.pending_jobs.len() {
+                                    let removed = self.monitor_state.pending_jobs.remove(self.monitor_state.selected_pending_idx);
+                                    self.monitor_state.history.push(format!("Đã xóa tác vụ chờ: {}", removed.src));
+                                    if self.monitor_state.selected_pending_idx >= self.monitor_state.pending_jobs.len() {
+                                        self.monitor_state.selected_pending_idx = self.monitor_state.pending_jobs.len().saturating_sub(1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('c') | KeyCode::Char('C') => {
+                    if self.monitor_state.active_pane == ui::monitor::MonitorPane::PendingJobs {
+                        if !self.monitor_state.pending_jobs.is_empty() {
+                            if self.monitor_state.selected_pending_idx < self.monitor_state.pending_jobs.len() {
+                                let job = self.monitor_state.pending_jobs.remove(self.monitor_state.selected_pending_idx);
+                                if self.monitor_state.selected_pending_idx >= self.monitor_state.pending_jobs.len() {
+                                    self.monitor_state.selected_pending_idx = self.monitor_state.pending_jobs.len().saturating_sub(1);
+                                }
+
+                                let (dest_remote, dest_path) = if let Some(idx) = job.dest.find(':') {
+                                    (job.dest[..idx].to_string(), job.dest[idx+1..].to_string())
+                                } else {
+                                    (String::new(), job.dest.clone())
+                                };
+
+                                let mut options = Vec::new();
+                                let mut actions = Vec::new();
+
+                                options.push(crate::lang::translate("exp_permission_option_cancel"));
+                                actions.push(ui::explorer::FallbackAction::PermissionCancel);
+
+                                if let Some(ref items) = job.items {
+                                    options.push(crate::lang::translate("exp_permission_option_as_much"));
+                                    actions.push(ui::explorer::FallbackAction::MultiPermissionCopyAsMuchAsPossible {
+                                        items: items.clone(),
+                                        dest_remote: dest_remote.clone(),
+                                        dest_path: dest_path.clone(),
+                                        restricted_files: job.restricted_files.clone(),
+                                    });
+
+                                    options.push(crate::lang::translate("exp_permission_option_restricted"));
+                                    actions.push(ui::explorer::FallbackAction::MultiPermissionRestrictedCopy {
+                                        items: items.clone(),
+                                        dest_remote: dest_remote.clone(),
+                                        dest_path: dest_path.clone(),
+                                        restricted_files: job.restricted_files.clone(),
+                                    });
+                                } else {
+                                    options.push(crate::lang::translate("exp_permission_option_as_much"));
+                                    actions.push(ui::explorer::FallbackAction::PermissionCopyAsMuchAsPossible {
+                                        src: job.src.clone(),
+                                        dest: job.dest.clone(),
+                                        is_dir: job.is_dir,
+                                        restricted_files: job.restricted_files.clone(),
+                                    });
+
+                                    options.push(crate::lang::translate("exp_permission_option_restricted"));
+                                    actions.push(ui::explorer::FallbackAction::PermissionRestrictedCopy {
+                                        src: job.src.clone(),
+                                        dest: job.dest.clone(),
+                                        is_dir: job.is_dir,
+                                        restricted_files: job.restricted_files.clone(),
+                                    });
+                                }
+
+                                self.explorer_state.popup = ui::explorer::ExplorerPopup::ConfirmFallback {
+                                    title: format!("GIẢI QUYẾT TÁC VỤ SAO CHÉP CHỜ ({})", job.src),
+                                    options,
+                                    selected_idx: 0,
+                                    actions,
+                                    restricted_files: Some(job.restricted_files),
+                                    restricted_scroll: 0,
+                                    focus_files: false,
+                                };
+                                self.screen = Screen::FileExplorer;
+                            }
                         }
                     }
                 }
@@ -9835,6 +10707,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         ui::explorer::FallbackAction::CleanupCloud { fs: fs_target },
                         ui::explorer::FallbackAction::Cancel,
                     ],
+                    restricted_files: None,
+                    restricted_scroll: 0,
+                    focus_files: false,
                 };
             }
             3 | 4 => {
@@ -9878,6 +10753,9 @@ fn get_underlying_remote(config_path: &str, remote: &str) -> Option<String> {
                         action,
                         ui::explorer::FallbackAction::Cancel,
                     ],
+                    restricted_files: None,
+                    restricted_scroll: 0,
+                    focus_files: false,
                 };
             }
             5 => {
@@ -10615,13 +11493,53 @@ async fn execute_restricted_copy(
                     });
                     Ok(())
                 } else {
-                    let err = format!("Lỗi sao chép tệp: {}", rpc_res.output);
-                    Err(err)
+                    let err_msg = rpc_res.output.to_lowercase();
+                    if err_msg.contains("restrictedlink") 
+                        || err_msg.contains("download") 
+                        || err_msg.contains("forbidden") 
+                        || err_msg.contains("only the owner")
+                    {
+                        // Bỏ qua lỗi do file bị hạn chế download
+                        let _ = tx.send(AppEvent::CopyProgress {
+                            src: src.clone(),
+                            dest: dest.clone(),
+                            pct: 100.0,
+                            job_id: None,
+                        });
+                        Ok(())
+                    } else {
+                        let err = format!("Lỗi sao chép tệp: {}", rpc_res.output);
+                        Err(err)
+                    }
                 }
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                let err_msg = e.to_lowercase();
+                if err_msg.contains("restrictedlink") 
+                    || err_msg.contains("download") 
+                    || err_msg.contains("forbidden") 
+                    || err_msg.contains("only the owner")
+                {
+                    let _ = tx.send(AppEvent::CopyProgress {
+                        src: src.clone(),
+                        dest: dest.clone(),
+                        pct: 100.0,
+                        job_id: None,
+                    });
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
         }
     } else {
+        // Luôn tạo thư mục gốc của đích trước để đảm bảo thư mục tồn tại ngay cả khi tất cả các tệp đều bị hạn chế tải xuống
+        let mkdir_param = serde_json::json!({
+            "fs": dest,
+            "remote": "",
+        }).to_string();
+        let _ = rclone::rpc_async("operations/mkdir".to_string(), mkdir_param).await;
+
         let list_param = serde_json::json!({
             "fs": src,
             "remote": "",
@@ -10786,5 +11704,60 @@ async fn execute_restricted_copy(
             Ok(())
         }
     }
+}
+
+async fn create_all_source_directories(src: &str, dest: &str) -> Result<(), String> {
+    // Tạo thư mục đích gốc
+    let mkdir_res = rclone::rpc_async(
+        "operations/mkdir".to_string(),
+        serde_json::json!({
+            "fs": dest,
+            "remote": "",
+        })
+        .to_string(),
+    )
+    .await;
+    if let Err(e) = mkdir_res {
+        return Err(e);
+    }
+
+    // Liệt kê đệ quy để tìm tất cả các thư mục con ở nguồn
+    let list_param = serde_json::json!({
+        "fs": src,
+        "remote": "",
+        "opt": {
+            "recurse": true
+        }
+    })
+    .to_string();
+
+    if let Ok(list_res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+        if list_res.status == 200 {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&list_res.output) {
+                if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                    for item in list_arr {
+                        let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                        if is_item_dir {
+                            if let Some(path) = item.get("Path").and_then(|p| p.as_str()) {
+                                if !path.is_empty() {
+                                    // Tạo thư mục con tương ứng ở đích
+                                    let _ = rclone::rpc_async(
+                                        "operations/mkdir".to_string(),
+                                        serde_json::json!({
+                                            "fs": dest,
+                                            "remote": path,
+                                        })
+                                        .to_string(),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 

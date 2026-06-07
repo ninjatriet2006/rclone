@@ -26,3 +26,14 @@ resource_windows_*.syso
 /appimagetool-x86_64.AppImage*
 /*.deb
 /*.AppImage
+
+# Rust build artifacts and target directories
+target/
+**/target/
+Cargo.lock.bak
+**/*.rs.bk
+
+# Compiled local binaries
+rclone_bin
+rclone-tui-remodel/target/
+rclonetuiv2/target/

@@ -225,6 +225,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Khởi tạo Rclone Core Engine
     rclone::initialize();
 
+    // Kích hoạt Metadata toàn cục để rclone trả về Metadata.copy-requires-writer-permission cho Google Drive
+    let set_param = serde_json::json!({
+        "main": {
+            "Metadata": true
+        }
+    }).to_string();
+    let _ = rclone::rpc_async("options/set".to_string(), set_param).await;
+
     // Thiết lập panic hook để dọn dẹp raw mode nếu app crash (Bug 6, 34)
     let default_panic = panic::take_hook();
     panic::set_hook(Box::new(move |info| {

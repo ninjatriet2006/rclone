@@ -1,0 +1,497 @@
+   Compiling rclonetuiv2 v0.1.0 (/home/bimatkeo/Documents/Rclone_Clone/rclone/rclonetuiv2)
+warning: unused imports: `DeleteTarget`, `MultiScanState`, and `Screen`
+ --> src/app/operations.rs:1:33
+  |
+1 | use crate::app::{App, AppEvent, Screen, DeleteTarget, ScanState, MultiScanState};
+  |                                 ^^^^^^  ^^^^^^^^^^^^             ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Line`
+ --> src/app/profile_manager.rs:5:12
+  |
+5 |     text::{Line, Span},
+  |            ^^^^
+
+warning: unused import: `crate::functions::keys::handle_input_key`
+   --> src/app/mod.rs:211:9
+    |
+211 | pub use crate::functions::keys::handle_input_key;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::functions::fs::parse_cmdline::parse_cmdline`
+ --> src/functions/daemon/parse_rclone_args.rs:4:5
+  |
+4 | use crate::functions::fs::parse_cmdline::parse_cmdline;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::functions::fs::parse_cmdline::parse_cmdline`
+ --> src/functions/daemon/scan_running_services.rs:3:5
+  |
+3 | use crate::functions::fs::parse_cmdline::parse_cmdline;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ratatui::layout::Rect`
+ --> src/functions/widgets/structs.rs:3:5
+  |
+3 | use ratatui::layout::Rect;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Line`
+ --> src/functions/widgets/draw_select_remote_popup.rs:4:12
+  |
+4 |     text::{Line, Span},
+  |            ^^^^
+
+warning: unused import: `Line`
+ --> src/functions/widgets/draw_special_actions_popup.rs:4:12
+  |
+4 |     text::{Line, Span},
+  |            ^^^^
+
+warning: unused import: `draw_header_bar::draw_header_bar`
+  --> src/functions/widgets/mod.rs:49:9
+   |
+49 | pub use draw_header_bar::draw_header_bar;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `draw_footer_bar::draw_footer_bar`
+  --> src/functions/widgets/mod.rs:50:9
+   |
+50 | pub use draw_footer_bar::draw_footer_bar;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `draw_copy_progress_popup` and `draw_move_progress_popup`
+  --> src/functions/widgets/mod.rs:55:36
+   |
+55 | pub use draw_copy_progress_popup::{draw_copy_progress_popup, draw_move_progress_popup};
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `AppEvent`
+ --> src/functions/keys/handle_input_paste_rename_keys.rs:2:23
+  |
+2 | use crate::app::{App, AppEvent};
+  |                       ^^^^^^^^
+
+warning: unused import: `AppEvent`
+ --> src/functions/keys/handle_input_shared_link_keys.rs:2:23
+  |
+2 | use crate::app::{App, AppEvent};
+  |                       ^^^^^^^^
+
+warning: unused import: `crate::functions::ui_helpers as ui`
+ --> src/functions/keys/handle_services_keys.rs:4:5
+  |
+4 | use crate::functions::ui_helpers as ui;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_checksum_select_keys::handle_checksum_select_keys`
+  --> src/functions/keys/mod.rs:30:9
+   |
+30 | pub use handle_checksum_select_keys::handle_checksum_select_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_confirm_fallback_keys::handle_confirm_fallback_keys`
+  --> src/functions/keys/mod.rs:31:9
+   |
+31 | pub use handle_confirm_fallback_keys::handle_confirm_fallback_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_copy_mode_keys::handle_copy_mode_keys`
+  --> src/functions/keys/mod.rs:32:9
+   |
+32 | pub use handle_copy_mode_keys::handle_copy_mode_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_cryptdecode_keys::handle_cryptdecode_keys`
+  --> src/functions/keys/mod.rs:33:9
+   |
+33 | pub use handle_cryptdecode_keys::handle_cryptdecode_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_decompress_mode_keys::handle_decompress_mode_keys`
+  --> src/functions/keys/mod.rs:34:9
+   |
+34 | pub use handle_decompress_mode_keys::handle_decompress_mode_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `handle_decompress_path_keys` and `handle_decompress_path_manual_input_keys`
+  --> src/functions/keys/mod.rs:35:39
+   |
+35 | pub use handle_decompress_path_keys::{handle_decompress_path_keys, handle_decompress_path_manual_input_keys};
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_dedupe_mode_keys::handle_dedupe_mode_keys`
+  --> src/functions/keys/mod.rs:36:9
+   |
+36 | pub use handle_dedupe_mode_keys::handle_dedupe_mode_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_file_view_keys::handle_file_view_keys`
+  --> src/functions/keys/mod.rs:37:9
+   |
+37 | pub use handle_file_view_keys::handle_file_view_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_input_paste_rename_keys::handle_input_paste_rename_keys`
+  --> src/functions/keys/mod.rs:39:9
+   |
+39 | pub use handle_input_paste_rename_keys::handle_input_paste_rename_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_input_shared_link_keys::handle_input_shared_link_keys`
+  --> src/functions/keys/mod.rs:40:9
+   |
+40 | pub use handle_input_shared_link_keys::handle_input_shared_link_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `handle_merge_similar_destination_select_keys`, `handle_merge_similar_preview_keys`, and `handle_merge_similar_scanning_keys`
+  --> src/functions/keys/mod.rs:42:5
+   |
+42 |     handle_merge_similar_destination_select_keys,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+43 |     handle_merge_similar_scanning_keys,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     handle_merge_similar_preview_keys,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_new_folder_popup_keys::handle_new_folder_popup_keys`
+  --> src/functions/keys/mod.rs:46:9
+   |
+46 | pub use handle_new_folder_popup_keys::handle_new_folder_popup_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_rename_popup_keys::handle_rename_popup_keys`
+  --> src/functions/keys/mod.rs:47:9
+   |
+47 | pub use handle_rename_popup_keys::handle_rename_popup_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_select_base_remote_keys::handle_select_base_remote_keys`
+  --> src/functions/keys/mod.rs:48:9
+   |
+48 | pub use handle_select_base_remote_keys::handle_select_base_remote_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_select_remote_keys::handle_select_remote_keys`
+  --> src/functions/keys/mod.rs:49:9
+   |
+49 | pub use handle_select_remote_keys::handle_select_remote_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_special_actions_keys::handle_special_actions_keys`
+  --> src/functions/keys/mod.rs:50:9
+   |
+50 | pub use handle_special_actions_keys::handle_special_actions_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `handle_tui_selector_keys::handle_tui_selector_keys`
+  --> src/functions/keys/mod.rs:51:9
+   |
+51 | pub use handle_tui_selector_keys::handle_tui_selector_keys;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `execute_fallback_action::execute_fallback_action`
+ --> src/functions/custom/mod.rs:8:9
+  |
+8 | pub use execute_fallback_action::execute_fallback_action;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `permission_scanner::run_multi_permission_scan`
+ --> src/functions/custom/mod.rs:9:9
+  |
+9 | pub use permission_scanner::run_multi_permission_scan;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `LogScope`, `initialize_logger`, `log_info_end`, `log_info_start`, and `log_rpc`
+  --> src/functions/mod.rs:12:25
+   |
+12 | pub use log::{log_info, log_rpc, log_info_start, log_info_end, initialize_logger, LogScope};
+   |                         ^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `get_default_rclone_conf` and `get_rclone_tui_conf`
+  --> src/functions/mod.rs:13:61
+   |
+13 | pub use app_config::{AppConfig, ExportResult, get_home_dir, get_default_rclone_conf, get_rclone_tui_conf};
+   |                                                             ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `SafeRpcResult`, `get_underlying_remote`, and `register_job_description`
+  --> src/functions/mod.rs:15:40
+   |
+15 | ...e, SafeRpcResult, rpc, rpc_async, run_rpc_job_async, run_rpc_job_async_with_progress, register_job_description, get_job_description, get_underlying_remote};
+   |       ^^^^^^^^^^^^^                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^                       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `parse_cmdline`
+  --> src/functions/mod.rs:16:112
+   |
+16 | pub use fs::{check_fuse_dependency, check_terminal_wrapping, parse_parent_and_child, copy_to_system_clipboard, parse_cmdline, get_rc...
+   |                                                                                                                ^^^^^^^^^^^^^
+
+warning: unused imports: `detect_systemd_service`, `kill_all_active_services`, `kill_process_by_pid`, and `parse_rclone_args`
+  --> src/functions/mod.rs:17:18
+   |
+17 | ...::{detect_systemd_service, parse_rclone_args, scan_running_services, scan_systemd_services, kill_process_by_pid, kill_all_active_services};
+   |       ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^                                                ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::env`
+ --> src/main.rs:4:5
+  |
+4 | use std::env;
+  |     ^^^^^^^^
+
+warning: unreachable pattern
+   --> src/functions/custom/execute_fallback_action.rs:234:21
+    |
+220 |                     Ok(_) => {
+    |                     ----- matches all the relevant values
+...
+234 |                     Ok(_) => {} // handled above
+    |                     ^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `initialize_logger` is never used
+ --> src/functions/log/initialize.rs:9:8
+  |
+9 | pub fn initialize_logger() {
+  |        ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `LogScope` is never constructed
+ --> src/functions/log/scope.rs:7:12
+  |
+7 | pub struct LogScope {
+  |            ^^^^^^^^
+
+warning: associated function `new` is never used
+  --> src/functions/log/scope.rs:13:12
+   |
+12 | impl LogScope {
+   | ------------- associated function in this implementation
+13 |     pub fn new(module: &'static str, action: &'static str, desc: &str) -> Self {
+   |            ^^^
+
+warning: function `get_indent_end_prefix` is never used
+  --> src/functions/log/write.rs:19:4
+   |
+19 | fn get_indent_end_prefix() -> String {
+   |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `log_info_start` is never used
+  --> src/functions/log/write.rs:45:8
+   |
+45 | pub fn log_info_start(module: &str, action: &str, desc: &str) {
+   |        ^^^^^^^^^^^^^^
+
+warning: function `log_info_end` is never used
+  --> src/functions/log/write.rs:64:8
+   |
+64 | pub fn log_info_end(module: &str, action: &str) {
+   |        ^^^^^^^^^^^^
+
+warning: function `parse_cmdline` is never used
+ --> src/functions/fs/parse_cmdline.rs:1:8
+  |
+1 | pub fn parse_cmdline(cmdline: &str) -> Vec<String> {
+  |        ^^^^^^^^^^^^^
+
+warning: function `kill_process_by_pid` is never used
+ --> src/functions/daemon/kill_process_by_pid.rs:3:8
+  |
+3 | pub fn kill_process_by_pid(pid: u32, is_mount: bool, mount_path: &str) -> std::io::Result<()> {
+  |        ^^^^^^^^^^^^^^^^^^^
+
+warning: function `kill_all_active_services` is never used
+ --> src/functions/daemon/kill_all_active_services.rs:4:8
+  |
+4 | pub fn kill_all_active_services(active_services: &mut Vec<ActiveService>) {
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `MoveNative`, `CopyNative`, `DeleteNative`, and `DeleteIndividual` are never constructed
+   --> src/functions/widgets/structs.rs:233:5
+    |
+232 | pub enum FallbackAction {
+    |          -------------- variants in this enum
+233 |     MoveNative { src: String, dest: String },
+    |     ^^^^^^^^^^
+...
+236 |     CopyNative { src: String, dest: String, use_checksum: bool },
+    |     ^^^^^^^^^^
+237 |     CopyLocalTransfer { src: String, dest: String, use_checksum: bool },
+238 |     DeleteNative { target: String, is_dir: bool },
+    |     ^^^^^^^^^^^^
+239 |     DeleteIndividual { target: String },
+    |     ^^^^^^^^^^^^^^^^
+    |
+    = note: `FallbackAction` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `dest` is never read
+   --> src/functions/widgets/structs.rs:497:9
+    |
+495 | pub struct FailedCopyItem {
+    |            -------------- field in this struct
+496 |     pub src: String,
+497 |     pub dest: String,
+    |         ^^^^
+    |
+    = note: `FailedCopyItem` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `draw_header_bar` is never used
+ --> src/functions/widgets/draw_header_bar.rs:8:8
+  |
+8 | pub fn draw_header_bar(frame: &mut Frame, area: Rect, active_profile_name: &str, is_fuse_installed: bool) {
+  |        ^^^^^^^^^^^^^^^
+
+warning: function `draw_footer_bar` is never used
+ --> src/functions/widgets/draw_footer_bar.rs:9:8
+  |
+9 | pub fn draw_footer_bar(frame: &mut Frame, area: Rect, help_text: &str) {
+  |        ^^^^^^^^^^^^^^^
+
+warning: function `draw_copy_progress_popup` is never used
+ --> src/functions/widgets/draw_copy_progress_popup.rs:4:8
+  |
+4 | pub fn draw_copy_progress_popup(frame: &mut Frame, src: &str, dest: &str, pct: f64) {
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `draw_move_progress_popup` is never used
+  --> src/functions/widgets/draw_copy_progress_popup.rs:12:8
+   |
+12 | pub fn draw_move_progress_popup(frame: &mut Frame, src: &str, dest: &str, pct: f64) {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_checksum_select_keys` is never used
+ --> src/functions/keys/handle_checksum_select_keys.rs:5:14
+  |
+5 | pub async fn handle_checksum_select_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_confirm_fallback_keys` is never used
+ --> src/functions/keys/handle_confirm_fallback_keys.rs:5:14
+  |
+5 | pub async fn handle_confirm_fallback_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_copy_mode_keys` is never used
+ --> src/functions/keys/handle_copy_mode_keys.rs:9:14
+  |
+9 | pub async fn handle_copy_mode_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_cryptdecode_keys` is never used
+ --> src/functions/keys/handle_cryptdecode_keys.rs:5:14
+  |
+5 | pub async fn handle_cryptdecode_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_decompress_mode_keys` is never used
+ --> src/functions/keys/handle_decompress_mode_keys.rs:5:14
+  |
+5 | pub async fn handle_decompress_mode_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_decompress_path_keys` is never used
+ --> src/functions/keys/handle_decompress_path_keys.rs:5:14
+  |
+5 | pub async fn handle_decompress_path_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_decompress_path_manual_input_keys` is never used
+  --> src/functions/keys/handle_decompress_path_keys.rs:50:14
+   |
+50 | pub async fn handle_decompress_path_manual_input_keys(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_dedupe_mode_keys` is never used
+ --> src/functions/keys/handle_dedupe_mode_keys.rs:5:14
+  |
+5 | pub async fn handle_dedupe_mode_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_file_view_keys` is never used
+ --> src/functions/keys/handle_file_view_keys.rs:5:8
+  |
+5 | pub fn handle_file_view_keys(
+  |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_input_paste_rename_keys` is never used
+ --> src/functions/keys/handle_input_paste_rename_keys.rs:6:14
+  |
+6 | pub async fn handle_input_paste_rename_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_input_shared_link_keys` is never used
+ --> src/functions/keys/handle_input_shared_link_keys.rs:5:14
+  |
+5 | pub async fn handle_input_shared_link_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_merge_similar_destination_select_keys` is never used
+ --> src/functions/keys/handle_merge_similar_keys.rs:6:14
+  |
+6 | pub async fn handle_merge_similar_destination_select_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_merge_similar_scanning_keys` is never used
+  --> src/functions/keys/handle_merge_similar_keys.rs:44:14
+   |
+44 | pub async fn handle_merge_similar_scanning_keys(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_merge_similar_preview_keys` is never used
+  --> src/functions/keys/handle_merge_similar_keys.rs:56:14
+   |
+56 | pub async fn handle_merge_similar_preview_keys(
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_new_folder_popup_keys` is never used
+ --> src/functions/keys/handle_new_folder_popup_keys.rs:7:8
+  |
+7 | pub fn handle_new_folder_popup_keys(
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_rename_popup_keys` is never used
+ --> src/functions/keys/handle_rename_popup_keys.rs:6:8
+  |
+6 | pub fn handle_rename_popup_keys(
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_select_base_remote_keys` is never used
+ --> src/functions/keys/handle_select_base_remote_keys.rs:5:14
+  |
+5 | pub async fn handle_select_base_remote_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_select_remote_keys` is never used
+ --> src/functions/keys/handle_select_remote_keys.rs:5:14
+  |
+5 | pub async fn handle_select_remote_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_special_actions_keys` is never used
+ --> src/functions/keys/handle_special_actions_keys.rs:5:14
+  |
+5 | pub async fn handle_special_actions_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `handle_tui_selector_keys` is never used
+ --> src/functions/keys/handle_tui_selector_keys.rs:5:14
+  |
+5 | pub async fn handle_tui_selector_keys(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `execute_fallback_action` is never used
+ --> src/functions/custom/execute_fallback_action.rs:6:14
+  |
+6 | pub async fn execute_fallback_action(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `run_multi_permission_scan` is never used
+ --> src/functions/custom/permission_scanner.rs:8:14
+  |
+8 | pub async fn run_multi_permission_scan(
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `rclonetuiv2` (bin "rclonetuiv2") generated 77 warnings (run `cargo fix --bin "rclonetuiv2" -p rclonetuiv2` to apply 39 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.21s

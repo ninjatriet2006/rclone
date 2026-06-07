@@ -1004,3 +1004,37 @@ func rcHashsumFile(ctx context.Context, in rc.Params) (out rc.Params, err error)
 	}
 	return out, err
 }
+
+func init() {
+	rc.Add(rc.Call{
+		Path:  "operations/dedupe",
+		Fn:    rcDedupe,
+		Title: "Deduplicate a directory",
+		Help: `This takes the following parameters:
+
+- fs - a remote name string e.g. "drive:path"
+- mode - deduplicate mode (interactive|skip|first|newest|oldest|largest|smallest|rename|list)
+- byHash - find identical hashes rather than names (boolean)
+`,
+	})
+}
+
+// rcDedupe deduplicates a directory
+func rcDedupe(ctx context.Context, in rc.Params) (out rc.Params, err error) {
+	f, err := rc.GetFs(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	modeStr, err := in.GetString("mode")
+	if err != nil {
+		modeStr = "interactive"
+	}
+	var mode DeduplicateMode
+	err = mode.Set(modeStr)
+	if err != nil {
+		return nil, err
+	}
+	byHash, _ := in.GetBool("byHash")
+	return nil, Deduplicate(ctx, f, mode, byHash)
+}
+
