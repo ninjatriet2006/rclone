@@ -227,6 +227,7 @@ impl App {
 
                                 if dest_clone.is_empty() {
                                     // It was a delete operation!
+                                    self.monitor_state.history.push(format!("Đang khởi động lại tác vụ xóa: {}", src_clone));
                                     self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                                     tokio::spawn(async move {
                                         let res = crate::app::run_rpc_job_async(
@@ -249,8 +250,51 @@ impl App {
                                         op.src == src_clone && op.dest == dest_clone
                                     });
 
-                                    if let Some(op) = matching_op {
-                                        if !op.items.is_empty() {
+                                     if let Some(op) = matching_op {
+                                         if op.tasks.is_some() {
+                                             let op_id = op.id.clone();
+                                             let src_path = op.src.clone();
+                                             let dest_path = op.dest.clone();
+                                             let is_dir = op.is_dir;
+                                             let use_checksum = op.use_checksum;
+                                             let is_copy = op.is_copy;
+                                             let tx_op = tx_clone.clone();
+
+                                             crate::app::prepare_active_operation_for_resume(&op_id);
+
+                                             self.explorer_state.popup = if is_copy {
+                                                 ui::explorer::ExplorerPopup::CopyProgress {
+                                                     src: src_path.clone(),
+                                                     dest: dest_path.clone(),
+                                                     pct: 0.0,
+                                                     job_id: None,
+                                                 }
+                                             } else {
+                                                 ui::explorer::ExplorerPopup::MoveProgress {
+                                                     src: src_path.clone(),
+                                                     dest: dest_path.clone(),
+                                                     pct: 0.0,
+                                                     job_id: None,
+                                                 }
+                                             };
+
+                                             self.monitor_state.history.push(format!("Đang khởi động lại tác vụ sao chép bất đồng bộ: {}", src_path));
+
+                                             tokio::spawn(async move {
+                                                 crate::app::operations::start_async_checker_and_transfer(
+                                                     op_id,
+                                                     src_path,
+                                                     dest_path,
+                                                     is_dir,
+                                                     use_checksum,
+                                                     is_copy,
+                                                     tx_op,
+                                                 ).await;
+                                             });
+                                             return;
+                                         }
+
+                                         if !op.items.is_empty() {
                                             // It's a multi-file operation! Resume copying the remaining items.
                                             let op_id = op.id.clone();
                                             let items_to_copy = op.items.clone();
@@ -273,13 +317,7 @@ impl App {
                                                 (String::new(), op.src.clone())
                                             };
 
-                                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
-                                                src: format!("({} mục)", items_to_copy.len()),
-                                                dest: dest_full.clone(),
-                                                pct: 0.0,
-                                                job_id: None,
-                                            };
-                                            self.screen = Screen::FileExplorer;
+                                            self.monitor_state.history.push(format!("Đang khởi động lại tác vụ sao chép nhiều mục từ: {}", op.src));
 
                                             let tx_op = tx_clone.clone();
                                             let pane_type = self.explorer_state.active_pane.clone();
@@ -423,13 +461,7 @@ impl App {
                                         "dstFs": dest_clone,
                                     });
 
-                                    self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
-                                        src: src_clone.clone(),
-                                        dest: dest_clone.clone(),
-                                        pct: 0.0,
-                                        job_id: None,
-                                    };
-                                    self.screen = Screen::FileExplorer;
+                                    self.monitor_state.history.push(format!("Đang khởi động lại tác vụ: {} -> {}", src_clone, dest_clone));
 
                                     tokio::spawn(async move {
                                         let res = crate::app::run_rpc_job_async_with_progress(

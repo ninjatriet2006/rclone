@@ -2,12 +2,10 @@ use crate::rclone;
 use crate::ui;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
 
 use crate::app::{
     App, AppEvent, run_rpc_job_async, run_rpc_job_async_with_progress,
-    copy_to_system_clipboard, parse_parent_and_child, strip_archive_extensions, ScanState, execute_restricted_copy, create_all_source_directories
+    copy_to_system_clipboard, parse_parent_and_child, strip_archive_extensions, execute_restricted_copy, create_all_source_directories
 };
 
 impl App {
@@ -808,239 +806,32 @@ impl App {
             }
         } else if action_type == "copy" {
             if dst_copy {
-                self.explorer_state.popup = ui::explorer::ExplorerPopup::PermissionScanning {
+                let op_id = format!("copy_async_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                let op = crate::app::ActiveOperation {
+                    id: op_id.clone(),
+                    action_type: "copy".to_string(),
                     src: src.clone(),
                     dest: dest.clone(),
+                    items: vec![src.clone()],
                     is_dir,
-                    scanned_count: 0,
-                    total_files: 0,
-                    restricted_count: 0,
+                    use_checksum,
+                    is_copy: true,
+                    completed_items: Some(Vec::new()),
+                    tasks: Some(Vec::new()),
                 };
+                crate::app::save_active_operation(&op);
+
+                self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                    src: src.clone(),
+                    dest: dest.clone(),
+                    pct: 0.0,
+                    job_id: None,
+                };
+
                 let tx_check = tx.clone();
-                let src_clone = src.clone();
-                let dest_clone = dest.clone();
-                let is_dir_clone = is_dir;
-                let scan_concurrency = self.config.scan_concurrency;
-                
-                let skip_flag = self.skip_permission_precheck.clone();
-                skip_flag.store(false, std::sync::atomic::Ordering::Relaxed);
-                
                 tokio::spawn(async move {
-                    let mut restricted_files = Vec::new();
-                    let mut single_file_size = 0u64;
-                    let total_files;
-                    let total_size;
-
-                    if !is_dir_clone {
-                        // Check single file
-                        let (src_fs, filename) = parse_parent_and_child(&src_clone);
-                        let list_param = json!({
-                            "fs": src_fs,
-                            "remote": filename,
-                            "opt": {
-                                "recurse": false,
-                                "metadata": true
-                            }
-                        }).to_string();
-
-                        if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
-                            if res.status == 200 {
-                                if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
-                                    if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
-                                        for item in list_arr {
-                                            let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
-                                            single_file_size = size;
-                                            let is_restricted = if let Some(meta) = item.get("Metadata") {
-                                                meta.get("copy-requires-writer-permission")
-                                                    .and_then(|v| v.as_str())
-                                                    == Some("true")
-                                            } else {
-                                                false
-                                            };
-                                            let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
-                                            let is_dangling = mime_type.contains("shortcut.dangling");
-
-                                            if is_restricted || is_dangling {
-                                                restricted_files.push(src_clone.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let scanned_count = 1;
-                        total_files = 1;
-                        total_size = single_file_size;
-                        if skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            restricted_files = Vec::new();
-                        }
-                        // Send progress update
-                        let _ = tx_check.send(AppEvent::PermissionScanProgress {
-                            src: src_clone.clone(),
-                            dest: dest_clone.clone(),
-                            is_dir: is_dir_clone,
-                            scanned_count,
-                            total_files: 1,
-                            restricted_count: restricted_files.len(),
-                        });
-                    } else {
-                        // Concurrent directory walk
-                        let state = Arc::new(Mutex::new(ScanState {
-                            queue: vec!["".to_string()],
-                            active_tasks: 0,
-                            files: Vec::new(),
-                            restricted_files: Vec::new(),
-                            total_size: 0,
-                        }));
-                        let notify = Arc::new(Notify::new());
-                        let max_concurrency = scan_concurrency;
-
-                        loop {
-                            if skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                                break;
-                            }
-                            let mut to_spawn = 0;
-                            let mut finished = false;
-
-                            {
-                                let s = state.lock().unwrap();
-                                if s.queue.is_empty() && s.active_tasks == 0 {
-                                    finished = true;
-                                } else {
-                                    let available_slots = max_concurrency - s.active_tasks;
-                                    to_spawn = available_slots.min(s.queue.len());
-                                }
-                            }
-
-                            if finished {
-                                break;
-                            }
-
-                            if to_spawn == 0 {
-                                notify.notified().await;
-                                continue;
-                            }
-
-                            for _ in 0..to_spawn {
-                                let dir = {
-                                    let mut s = state.lock().unwrap();
-                                    s.active_tasks += 1;
-                                    s.queue.remove(0)
-                                };
-
-                                let state_clone = Arc::clone(&state);
-                                let notify_clone = Arc::clone(&notify);
-                                let folder_fs = src_clone.clone();
-                                let tx_progress = tx_check.clone();
-                                let src_p = src_clone.clone();
-                                let dest_p = dest_clone.clone();
-
-                                tokio::spawn(async move {
-                                    let list_param = json!({
-                                        "fs": folder_fs,
-                                        "remote": dir,
-                                        "opt": {
-                                            "recurse": false,
-                                            "metadata": true
-                                        }
-                                    }).to_string();
-
-                                    let mut new_dirs = Vec::new();
-                                    let mut new_files = Vec::new();
-                                    let mut new_restricted = Vec::new();
-                                    let mut new_sizes_sum = 0u64;
-
-                                    if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
-                                        if res.status == 200 {
-                                            if let Ok(val) = serde_json::from_str::<Value>(&res.output) {
-                                                if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
-                                                    for item in list_arr {
-                                                        let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
-                                                        let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("");
-
-                                                        if is_item_dir {
-                                                            new_dirs.push(path.to_string());
-                                                        } else {
-                                                            new_files.push(path.to_string());
-                                                            let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
-                                                            new_sizes_sum += size;
-                                                            let is_restricted = if let Some(meta) = item.get("Metadata") {
-                                                                meta.get("copy-requires-writer-permission")
-                                                                    .and_then(|v| v.as_str())
-                                                                    == Some("true")
-                                                            } else {
-                                                                false
-                                                            };
-                                                            let mime_type = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
-                                                            let is_dangling = mime_type.contains("shortcut.dangling");
-
-                                                            if is_restricted || is_dangling {
-                                                                new_restricted.push(path.to_string());
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    let (current_scanned, current_restricted) = {
-                                        let mut s = state_clone.lock().unwrap();
-                                        s.queue.extend(new_dirs);
-                                        s.files.extend(new_files);
-                                        s.restricted_files.extend(new_restricted);
-                                        s.total_size += new_sizes_sum;
-                                        s.active_tasks -= 1;
-                                        (s.files.len(), s.restricted_files.len())
-                                    };
-
-                                    // Send progress update
-                                    let _ = tx_progress.send(AppEvent::PermissionScanProgress {
-                                        src: src_p,
-                                        dest: dest_p,
-                                        is_dir: true,
-                                        scanned_count: current_scanned,
-                                        total_files: 0,
-                                        restricted_count: current_restricted,
-                                    });
-
-                                    notify_clone.notify_one();
-                                });
-                            }
-                        }
-
-                        let final_state = state.lock().unwrap();
-                        if skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            restricted_files = Vec::new();
-                        } else {
-                            restricted_files = final_state.restricted_files.clone();
-                        }
-                        total_files = final_state.files.len() as u64;
-                        total_size = final_state.total_size;
-                    }
-
-                    if restricted_files.is_empty() {
-                        let _ = tx_check.send(AppEvent::PermissionCheckPassed {
-                            src: src_clone,
-                            dest: dest_clone,
-                            is_dir: is_dir_clone,
-                            use_checksum,
-                            total_files,
-                            total_size,
-                        });
-                    } else {
-                        let _ = tx_check.send(AppEvent::PermissionErrorDetected {
-                            src: src_clone,
-                            dest: dest_clone,
-                            is_dir: is_dir_clone,
-                            restricted_files,
-                            use_checksum,
-                            total_files,
-                            total_size,
-                        });
-                    }
+                    start_async_checker_and_transfer(op_id, src, dest, is_dir, use_checksum, true, tx_check).await;
                 });
-
             } else {
                 let mut options = Vec::new();
                 let mut actions = Vec::new();
@@ -1207,6 +998,7 @@ impl App {
                     use_checksum: false,
                     is_copy: false,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
                 tokio::spawn(async move {
@@ -1245,6 +1037,7 @@ impl App {
                     use_checksum: false,
                     is_copy: false,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
                 tokio::spawn(async move {
@@ -1474,6 +1267,7 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1540,6 +1334,7 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1585,6 +1380,7 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1714,6 +1510,7 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -3007,51 +2804,155 @@ pub async fn get_directory_stats(src: &str) -> Option<(u64, u64)> {
     None
 }
 
+use std::sync::RwLock;
+
+lazy_static::lazy_static! {
+    pub static ref DYNAMIC_THREAD_STATE: RwLock<DynamicThreadState> = RwLock::new(DynamicThreadState::new());
+}
+
+#[derive(Debug, Clone)]
+pub struct DynamicThreadState {
+    pub current_transfers_multiplier: f64,
+    pub last_bottleneck_time: Option<std::time::Instant>,
+    pub consecutive_success_ticks: u32,
+}
+
+impl DynamicThreadState {
+    pub fn new() -> Self {
+        Self {
+            current_transfers_multiplier: 1.0,
+            last_bottleneck_time: None,
+            consecutive_success_ticks: 0,
+        }
+    }
+}
+
+pub fn extract_remote_name(path: &str) -> Option<String> {
+    if let Some(colon_idx) = path.find(':') {
+        let remote_part = &path[..colon_idx];
+        if let Some(comma_idx) = remote_part.find(',') {
+            Some(remote_part[..comma_idx].to_string())
+        } else {
+            Some(remote_part.to_string())
+        }
+    } else {
+        None
+    }
+}
+
+pub async fn get_remote_type(remote_name: &str) -> Option<String> {
+    if remote_name.is_empty() {
+        return None;
+    }
+    let param = serde_json::json!({ "name": remote_name }).to_string();
+    if let Ok(res) = crate::rclone::rpc_async("config/get".to_string(), param).await {
+        if res.status == 200 {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                if let Some(t) = val.get("type").and_then(|t| t.as_str()) {
+                    return Some(t.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn get_concurrency_limit(src_type: Option<&str>, dst_type: Option<&str>) -> (u64, u64) {
+    let mut limit_transfers = 64; // default max
+    let mut limit_checkers = 128; // default max
+
+    let types = [src_type, dst_type];
+    for t in types.iter().flatten() {
+        let (t_limit, c_limit) = match *t {
+            "drive" => (2, 4),      // Google Drive: strict 10 req/s, split with concurrent jobs
+            "onedrive" => (2, 4),   // OneDrive: aggressive throttling
+            "box" => (2, 4),        // Box: strict limits
+            "dropbox" => (3, 6),    // Dropbox: moderate limits
+            "s3" | "google cloud storage" | "azureblob" => (8, 16), // Object store: high limit
+            _ => (4, 8),            // Generic cloud remotes
+        };
+        if t_limit < limit_transfers {
+            limit_transfers = t_limit;
+        }
+        if c_limit < limit_checkers {
+            limit_checkers = c_limit;
+        }
+    }
+    (limit_transfers, limit_checkers)
+}
+
+#[allow(dead_code)]
 pub fn calculate_optimal_threads(total_files: u64, total_size: u64, max_bandwidth: u64) -> (u64, u64) {
+    calculate_optimal_threads_v2(total_files, total_size, max_bandwidth, None, None)
+}
+
+pub fn calculate_optimal_threads_v2(
+    total_files: u64,
+    total_size: u64,
+    max_bandwidth: u64,
+    src_type: Option<&str>,
+    dst_type: Option<&str>,
+) -> (u64, u64) {
     let config = crate::app_config::AppConfig::load();
 
-    // Nếu người dùng ép buộc cấu hình ghi đè số luồng cố định
-    if let (Some(t_over), Some(c_over)) = (config.transfers_prior_fixed, config.checkers_prior_fixed) {
-        return (t_over, c_over);
-    }
+    // Lấy giới hạn tối đa cho phép dựa trên loại Cloud remote để tránh nghẽn khi có account khác dùng chung
+    let (cloud_max_transfers, cloud_max_checkers) = get_concurrency_limit(src_type, dst_type);
 
-    let mut transfers = if let Some(t_over) = config.transfers_prior_fixed {
-        t_over
+    // Đọc hệ số nhân luồng động hiện tại
+    let multiplier = if let Ok(state) = DYNAMIC_THREAD_STATE.read() {
+        state.current_transfers_multiplier
     } else {
-        if total_files == 0 {
-            config.min_transfers
-        } else {
-            let avg_file_size_bytes = total_size / total_files;
+        1.0
+    };
 
-            if avg_file_size_bytes >= 10_000_000 {
-                // File kích thước lớn (>= 10MB)
-                // Số luồng tối ưu tỉ lệ thuận với số lượng file.
-                let max_large = config.max_transfers.max(config.min_transfers);
-                (total_files / 2).clamp(config.min_transfers, max_large)
+    let base_transfers = if total_files == 0 {
+        config.min_transfers
+    } else {
+        let avg_file_size_bytes = total_size / total_files;
+
+        if avg_file_size_bytes >= 10_000_000 {
+            // File kích thước lớn (>= 10MB)
+            let max_large = config.max_transfers.max(config.min_transfers);
+            (total_files / 2).clamp(config.min_transfers, max_large)
+        } else {
+            // Đối với file nhỏ (< 10MB)
+            let latency_secs = 1.0;
+            let single_thread_throughput = (avg_file_size_bytes as f64) / latency_secs;
+            if single_thread_throughput <= 0.0 {
+                config.max_transfers
             } else {
-                // Đối với file nhỏ (< 10MB), độ trễ API cloud (latency) đóng vai trò chính.
-                // Ước lượng độ trễ API trung bình mỗi request file là 1.0 giây
-                let latency_secs = 1.0;
-                let single_thread_throughput = (avg_file_size_bytes as f64) / latency_secs;
-                if single_thread_throughput <= 0.0 {
-                    config.max_transfers
-                } else {
-                    let required_transfers = (max_bandwidth as f64) / single_thread_throughput;
-                    (required_transfers.round() as u64).clamp(config.min_transfers, config.max_transfers)
-                }
+                let required_transfers = (max_bandwidth as f64) / single_thread_throughput;
+                (required_transfers.round() as u64).clamp(config.min_transfers, config.max_transfers)
             }
         }
     };
 
-    let checkers = if let Some(c_over) = config.checkers_prior_fixed {
-        c_over
+    let base_checkers = (base_transfers * 2).clamp(config.min_checkers, config.max_checkers);
+
+    // Áp dụng hệ số nhân động lên số luồng cơ sở
+    let mut transfers = (base_transfers as f64 * multiplier).round() as u64;
+    let mut checkers = (base_checkers as f64 * multiplier).round() as u64;
+
+    // Ràng buộc 1: Giới hạn bởi min/max cấu hình
+    transfers = transfers.clamp(config.min_transfers, config.max_transfers);
+    checkers = checkers.clamp(config.min_checkers, config.max_checkers);
+
+    // Ràng buộc 2: Nếu người dùng đặt Prior Fixed thì đây là mốc tối đa (nhưng vẫn có thể giảm xuống dưới mốc này nếu nghẽn)
+    if let Some(t_fixed) = config.transfers_prior_fixed {
+        transfers = transfers.min(t_fixed);
     } else {
-        (transfers * 2).clamp(config.min_checkers, config.max_checkers)
-    };
+        // Nếu không đặt fixed, thì giới hạn tối đa vẫn phải theo cloud limits
+        transfers = transfers.min(cloud_max_transfers);
+    }
 
-    transfers = transfers.min(config.max_transfers);
+    if let Some(c_fixed) = config.checkers_prior_fixed {
+        checkers = checkers.min(c_fixed);
+    } else {
+        checkers = checkers.min(cloud_max_checkers);
+    }
 
-    (transfers, checkers)
+    // Đảm bảo tối thiểu ít nhất 1 luồng
+    (transfers.max(1), checkers.max(1))
 }
 
 pub async fn inject_optimal_thread_config(
@@ -3061,15 +2962,39 @@ pub async fn inject_optimal_thread_config(
     max_bandwidth: u64,
 ) -> (u64, u64) {
     let config = crate::app_config::AppConfig::load();
-    
-    // 1. Áp dụng prior_fixed từ cấu hình nếu có, ngược lại dùng default min_transfers / min_checkers
+    let dst = param.get("dstFs").and_then(|d| d.as_str()).unwrap_or("");
+
+    let src_remote = extract_remote_name(src);
+    let dst_remote = extract_remote_name(dst);
+
+    let src_type = if let Some(ref r) = src_remote {
+        get_remote_type(r).await
+    } else {
+        None
+    };
+
+    let dst_type = if let Some(ref r) = dst_remote {
+        get_remote_type(r).await
+    } else {
+        None
+    };
+
+    let (cloud_max_transfers, cloud_max_checkers) = get_concurrency_limit(src_type.as_deref(), dst_type.as_deref());
+
+    // Đọc hệ số nhân luồng động hiện tại
+    let multiplier = if let Ok(state) = DYNAMIC_THREAD_STATE.read() {
+        state.current_transfers_multiplier
+    } else {
+        1.0
+    };
+
     let mut transfers = config.transfers_prior_fixed.unwrap_or(config.min_transfers);
     let mut checkers = config.checkers_prior_fixed.unwrap_or(config.min_checkers);
 
     if config.transfers_prior_fixed.is_none() || config.checkers_prior_fixed.is_none() {
         if is_dir {
             if let Some((count, bytes)) = get_directory_stats(src).await {
-                let (opt_t, opt_c) = calculate_optimal_threads(count, bytes, max_bandwidth);
+                let (opt_t, opt_c) = calculate_optimal_threads_v2(count, bytes, max_bandwidth, src_type.as_deref(), dst_type.as_deref());
                 if config.transfers_prior_fixed.is_none() {
                     transfers = opt_t;
                 }
@@ -3077,34 +3002,48 @@ pub async fn inject_optimal_thread_config(
                     checkers = opt_c;
                 }
                 crate::app_config::log_info(&format!(
-                    "[Thread Optimizer] Thư mục: {} | Số file: {} | Tổng size: {} bytes | Băng thông: {} bytes/s -> Luồng tối ưu: Transfers={}, Checkers={}",
-                    src, count, bytes, max_bandwidth, transfers, checkers
+                    "[Thread Optimizer] Thư mục: {} | Số file: {} | Tổng size: {} bytes | Băng thông: {} bytes/s | Loại: Src={:?}, Dst={:?} | Hệ số nhân: {} -> Luồng tối ưu: Transfers={}, Checkers={}",
+                    src, count, bytes, max_bandwidth, src_type, dst_type, multiplier, transfers, checkers
                 ));
             } else {
-                // Thất bại khi lấy size (timeout/lỗi mạng): Dùng luồng mặc định tối ưu cao hơn cho thư mục
-                if config.transfers_prior_fixed.is_none() {
-                    transfers = (config.min_transfers * 2).clamp(config.min_transfers, config.max_transfers);
-                }
-                if config.checkers_prior_fixed.is_none() {
-                    checkers = (config.min_checkers * 2).clamp(config.min_checkers, config.max_checkers);
-                }
+                // Thất bại khi lấy size: Dùng luồng mặc định tối ưu cao hơn cho thư mục và nhân với multiplier
+                let base_t = config.min_transfers * 2;
+                let base_c = config.min_checkers * 2;
+
+                transfers = (base_t as f64 * multiplier).round() as u64;
+                checkers = (base_c as f64 * multiplier).round() as u64;
+
+                // Giới hạn
+                transfers = transfers.clamp(config.min_transfers, config.max_transfers).min(cloud_max_transfers);
+                checkers = checkers.clamp(config.min_checkers, config.max_checkers).min(cloud_max_checkers);
+
                 crate::app_config::log_info(&format!(
-                    "[Thread Optimizer] Thất bại khi lấy size thư mục: {}. Sử dụng luồng mặc định tối ưu: Transfers={}, Checkers={}",
+                    "[Thread Optimizer] Thất bại khi lấy size thư mục: {}. Sử dụng luồng mặc định điều phối động: Transfers={}, Checkers={}",
                     src, transfers, checkers
                 ));
             }
         } else {
             // File đơn lẻ
-            if config.transfers_prior_fixed.is_none() {
-                transfers = 4.min(config.min_transfers).max(1);
-            }
-            if config.checkers_prior_fixed.is_none() {
-                checkers = 8.min(config.min_checkers).max(1);
-            }
+            let base_t = 4.min(config.min_transfers).max(1);
+            let base_c = 8.min(config.min_checkers).max(1);
+
+            transfers = (base_t as f64 * multiplier).round() as u64;
+            checkers = (base_c as f64 * multiplier).round() as u64;
+
+            transfers = transfers.clamp(config.min_transfers.min(base_t), config.max_transfers).min(cloud_max_transfers);
+            checkers = checkers.clamp(config.min_checkers.min(base_c), config.max_checkers).min(cloud_max_checkers);
         }
+    } else {
+        // Có Prior Fixed: Áp dụng multiplier lên mức cố định này để có thể tự động giảm luồng giải nghẽn
+        let final_t = (transfers as f64 * multiplier).round() as u64;
+        let final_c = (checkers as f64 * multiplier).round() as u64;
+
+        // Giới hạn tối đa là mức Prior Fixed ban đầu
+        transfers = final_t.min(transfers).clamp(config.min_transfers, config.max_transfers);
+        checkers = final_c.min(checkers).clamp(config.min_checkers, config.max_checkers);
     }
 
-    // Giới hạn bởi max_transfers / max_checkers
+    // Giới hạn cuối cùng bởi config max
     transfers = transfers.min(config.max_transfers);
     checkers = checkers.min(config.max_checkers);
     
@@ -3118,6 +3057,367 @@ pub async fn inject_optimal_thread_config(
         obj.insert("_config".to_string(), serde_json::Value::Object(config_obj));
     }
     
-    (transfers, checkers)
+    (transfers.max(1), checkers.max(1))
+}
+
+pub async fn start_async_checker_and_transfer(
+    op_id: String,
+    src: String,
+    dest: String,
+    is_dir: bool,
+    _use_checksum: bool,
+    is_copy: bool,
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+) {
+    let op_id_clone = op_id.clone();
+    let src_clone = src.clone();
+    let dest_clone = dest.clone();
+    let tx_clone = tx.clone();
+    let config_path = crate::app_config::AppConfig::load().get_active_profile_path();
+
+    let checker_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let checker_running_clone = checker_running.clone();
+
+    // 1. Spawning Checker Task
+    tokio::spawn(async move {
+        let mut dest_files = std::collections::HashMap::new();
+        if is_dir {
+            let list_param = serde_json::json!({
+                "fs": dest_clone,
+                "remote": "",
+                "opt": { "recurse": true }
+            }).to_string();
+            if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                if res.status == 200 {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                        if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
+                            for item in arr {
+                                if let Some(path) = item.get("Path").and_then(|p| p.as_str()) {
+                                    let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                    let mod_time = item.get("ModTime").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                                    dest_files.insert(path.to_string(), (size, mod_time));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut scanned_count = 0;
+        let mut restricted_count = 0;
+
+        if !is_dir {
+            // Single file scan
+            let (src_fs, filename) = parse_parent_and_child(&src_clone);
+            let list_param = serde_json::json!({
+                "fs": src_fs,
+                "remote": filename,
+                "opt": { "recurse": false, "metadata": true }
+            }).to_string();
+
+            let mut is_restricted = false;
+            let mut file_size = 0;
+
+            if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                if res.status == 200 {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                        if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
+                            for item in arr {
+                                file_size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                let is_rest = if let Some(meta) = item.get("Metadata") {
+                                    meta.get("copy-requires-writer-permission").and_then(|v| v.as_str()) == Some("true")
+                                } else {
+                                    false
+                                };
+                                let mime = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                if is_rest || mime.contains("shortcut.dangling") {
+                                    is_restricted = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let status = if is_restricted {
+                restricted_count += 1;
+                crate::app::TaskStatus::Failed
+            } else {
+                let mut matches = false;
+                if dest_files.contains_key(&filename) {
+                    let (d_size, _) = dest_files.get(&filename).unwrap();
+                    if *d_size == file_size {
+                        matches = true;
+                    }
+                }
+                if matches {
+                    crate::app::TaskStatus::Skipped
+                } else {
+                    crate::app::TaskStatus::Pending
+                }
+            };
+
+            let task = crate::app::FileTask {
+                name: filename,
+                size: file_size,
+                status,
+                error: if is_restricted { Some("Restricted link/dangling file skipped".to_string()) } else { None },
+            };
+
+            crate::app::append_tasks_to_active_operation(&op_id_clone, &[task]);
+            scanned_count = 1;
+
+            let _ = tx_clone.send(AppEvent::PermissionScanProgress {
+                src: src_clone.clone(),
+                dest: dest_clone.clone(),
+                is_dir: false,
+                scanned_count,
+                total_files: 1,
+                restricted_count,
+            });
+        } else {
+            // Directory walk
+            let mut queue = vec!["".to_string()];
+            let mut batch = Vec::new();
+
+            while !queue.is_empty() {
+                let dir = queue.remove(0);
+                let list_param = serde_json::json!({
+                    "fs": src_clone,
+                    "remote": dir,
+                    "opt": { "recurse": false, "metadata": true }
+                }).to_string();
+
+                if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                    if res.status == 200 {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                            if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
+                                for item in arr {
+                                    let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                                    let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+
+                                    if is_item_dir {
+                                        queue.push(path);
+                                    } else {
+                                        scanned_count += 1;
+                                        let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                        let is_rest = if let Some(meta) = item.get("Metadata") {
+                                            meta.get("copy-requires-writer-permission").and_then(|v| v.as_str()) == Some("true")
+                                        } else {
+                                            false
+                                        };
+                                        let mime = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                        let is_restricted = is_rest || mime.contains("shortcut.dangling");
+
+                                        let status = if is_restricted {
+                                            restricted_count += 1;
+                                            crate::app::TaskStatus::Failed
+                                        } else {
+                                            let mut matches = false;
+                                            if dest_files.contains_key(&path) {
+                                                let (d_size, _) = dest_files.get(&path).unwrap();
+                                                if *d_size == size {
+                                                    matches = true;
+                                                }
+                                            }
+                                            if matches {
+                                                crate::app::TaskStatus::Skipped
+                                            } else {
+                                                crate::app::TaskStatus::Pending
+                                            }
+                                        };
+
+                                        batch.push(crate::app::FileTask {
+                                            name: path,
+                                            size,
+                                            status,
+                                            error: if is_restricted { Some("Restricted/dangling file skipped".to_string()) } else { None },
+                                        });
+
+                                        if batch.len() >= 20 {
+                                            crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+                                            batch.clear();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let _ = tx_clone.send(AppEvent::PermissionScanProgress {
+                    src: src_clone.clone(),
+                    dest: dest_clone.clone(),
+                    is_dir: true,
+                    scanned_count,
+                    total_files: 0,
+                    restricted_count,
+                });
+            }
+
+            if !batch.is_empty() {
+                crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+            }
+        }
+
+        checker_running_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    // 2. Spawning Transfer Task
+    tokio::spawn(async move {
+        let op_id_transfer = op_id.clone();
+        let src_transfer = src.clone();
+        let dest_transfer = dest.clone();
+        let tx_transfer = tx.clone();
+        let config_path_transfer = config_path.clone();
+
+        loop {
+            // Read tasks from active_ops
+            let ops = crate::app::load_active_operations();
+            let op_opt = ops.into_iter().find(|o| o.id == op_id_transfer);
+
+            if op_opt.is_none() {
+                break;
+            }
+
+            let op = op_opt.unwrap();
+            let mut pending_tasks = Vec::new();
+            if let Some(ref tasks) = op.tasks {
+                for task in tasks {
+                    if task.status == crate::app::TaskStatus::Pending {
+                        pending_tasks.push(task.clone());
+                    }
+                }
+            }
+
+            if pending_tasks.is_empty() {
+                if !checker_running.load(std::sync::atomic::Ordering::Relaxed) {
+                    // Checker has finished and no tasks are pending
+                    // Clear the active operation on success
+                    crate::app::remove_active_operation(&op_id_transfer);
+                    
+                    let progress_event = if is_copy {
+                        AppEvent::CopyProgress {
+                            src: src_transfer.clone(),
+                            dest: dest_transfer.clone(),
+                            pct: 100.0,
+                            job_id: None,
+                        }
+                    } else {
+                        AppEvent::MoveProgress {
+                            src: src_transfer.clone(),
+                            dest: dest_transfer.clone(),
+                            pct: 100.0,
+                            job_id: None,
+                        }
+                    };
+                    let _ = tx_transfer.send(progress_event);
+
+                    let _ = tx_transfer.send(AppEvent::ExplorerOperationFinished {
+                        pane: ui::explorer::ActivePane::Left,
+                        op_name: if is_copy { "sao chép (copy)".to_string() } else { "di chuyển (move)".to_string() },
+                        result: Ok(()),
+                    });
+                    break;
+                } else {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+
+            // Get a batch of up to 50 pending files
+            let batch: Vec<crate::app::FileTask> = pending_tasks.into_iter().take(50).collect();
+            let batch_names: Vec<String> = batch.iter().map(|t| t.name.clone()).collect();
+
+            // Mark batch files as Transferring
+            crate::app::update_tasks_status_in_active_operation(&op_id_transfer, &batch_names, crate::app::TaskStatus::Transferring, None);
+
+            // Write batch files to a temp files list
+            let temp_dir = std::env::temp_dir();
+            let temp_file_path = temp_dir.join(format!(
+                "rclone_batch_{}_{}.txt",
+                op_id_transfer,
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
+            ));
+            let file_content = batch_names.join("\n");
+            let _ = std::fs::write(&temp_file_path, file_content);
+
+            let mut cmd = tokio::process::Command::new("rclone");
+            let cmd_name = if is_copy { "copy" } else { "move" };
+            cmd.args(&[
+                cmd_name,
+                "--files-from",
+                temp_file_path.to_string_lossy().as_ref(),
+                &src_transfer,
+                &dest_transfer,
+                "--config",
+                &config_path_transfer,
+                "--transfers",
+                "4",
+                "--checkers",
+                "4"
+            ]);
+
+            let run_res = cmd.spawn();
+            if let Ok(mut child) = run_res {
+                let status = child.wait().await;
+                let success = status.is_ok() && status.unwrap().success();
+
+                let new_status = if success {
+                    crate::app::TaskStatus::Completed
+                } else {
+                    crate::app::TaskStatus::Failed
+                };
+                let err_msg = if success {
+                    None
+                } else {
+                    Some("Transfer subprocess returned non-zero status".to_string())
+                };
+
+                crate::app::update_tasks_status_in_active_operation(&op_id_transfer, &batch_names, new_status, err_msg);
+            } else {
+                crate::app::update_tasks_status_in_active_operation(
+                    &op_id_transfer,
+                    &batch_names,
+                    crate::app::TaskStatus::Failed,
+                    Some("Failed to spawn rclone CLI process".to_string()),
+                );
+            }
+
+            // Cleanup temp file
+            let _ = std::fs::remove_file(&temp_file_path);
+
+            // Send CopyProgress event to update TUI progress bar
+            let ops = crate::app::load_active_operations();
+            if let Some(op) = ops.into_iter().find(|o| o.id == op_id_transfer) {
+                if let Some(ref tasks) = op.tasks {
+                    let total = tasks.len();
+                    let completed = tasks.iter().filter(|t| t.status == crate::app::TaskStatus::Completed || t.status == crate::app::TaskStatus::Skipped).count();
+                    let pct = if total > 0 {
+                        (completed as f64 / total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    let progress_event = if is_copy {
+                        AppEvent::CopyProgress {
+                            src: src_transfer.clone(),
+                            dest: dest_transfer.clone(),
+                            pct,
+                            job_id: None,
+                        }
+                    } else {
+                        AppEvent::MoveProgress {
+                            src: src_transfer.clone(),
+                            dest: dest_transfer.clone(),
+                            pct,
+                            job_id: None,
+                        }
+                    };
+                    let _ = tx_transfer.send(progress_event);
+                }
+            }
+        }
+    });
 }
 

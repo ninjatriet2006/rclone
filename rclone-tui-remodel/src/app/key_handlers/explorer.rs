@@ -1784,6 +1784,7 @@ impl App {
                             use_checksum: false,
                             is_copy: false,
                             completed_items: Some(Vec::new()),
+                            tasks: None,
                         };
                         crate::app::save_active_operation(&op);
 

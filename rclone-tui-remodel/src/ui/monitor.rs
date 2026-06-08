@@ -98,6 +98,7 @@ pub struct MonitorState {
     pub max_bandwidth: u64,
     pub active_transfers: usize,
     pub active_checks: usize,
+    pub bottleneck_reason: String,
     // tree states
     pub expanded_paths: std::collections::HashSet<String>,
     pub visible_nodes: Vec<VisibleNode>,
@@ -286,6 +287,7 @@ impl MonitorState {
             max_bandwidth: 12_500_000,
             active_transfers: 0,
             active_checks: 0,
+            bottleneck_reason: "Tốc độ tối ưu / Bình thường (Optimal)".to_string(),
             expanded_paths,
             visible_nodes: Vec::new(),
             selected_node_idx: 0,
@@ -668,7 +670,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),      // Tổng quan tiến trình (Global Stats)
+            Constraint::Length(6),      // Tổng quan tiến trình (Global Stats)
             Constraint::Percentage(55), // Khung ở giữa (Active, Pending & Failed)
             Constraint::Min(5),         // Chi tiết tác vụ đang chọn
             Constraint::Length(3),      // Help bar
@@ -787,10 +789,27 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
         ),
     ];
 
+    let fourth_line_spans = vec![
+        Span::raw(" Phân tích nghẽn (Bottleneck): "),
+        Span::styled(
+            state.bottleneck_reason.clone(),
+            Style::default()
+                .fg(if state.bottleneck_reason.contains("Bình thường") || state.bottleneck_reason.contains("Optimal") {
+                    Color::Green
+                } else if state.bottleneck_reason.contains("băng thông") || state.bottleneck_reason.contains("Limit") {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                })
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
     let stats_text = vec![
         Line::from(first_line_spans),
         Line::from(pct_line_spans),
         Line::from(third_line_spans),
+        Line::from(fourth_line_spans),
     ];
 
     let stats_block = Block::default()

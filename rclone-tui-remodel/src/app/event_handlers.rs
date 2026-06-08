@@ -62,6 +62,10 @@ impl App {
                 let mut total = 0;
                 let mut active_transfers = 0;
                 let mut active_checks = 0;
+                let mut upload_transfers = 0;
+                let mut download_transfers = 0;
+                let mut source_remotes = Vec::new();
+                let mut dest_remotes = Vec::new();
 
                 if let Ok(rpc_res) = &res {
                     if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
@@ -196,23 +200,33 @@ impl App {
                                         // Dự đoán hướng của Job
                                         let mut direction = crate::app::get_job_direction(id);
                                         if direction.is_none() {
-                                            let desc_lower = desc.to_lowercase();
-                                            if desc_lower.contains("sao chép") || desc_lower.contains("di chuyển") || desc_lower.contains("copy") || desc_lower.contains("move") {
-                                                if let Some(arrow_idx) = desc.find("->") {
-                                                    let src_part = &desc[..arrow_idx];
-                                                    let dest_part = &desc[arrow_idx + 2..];
-                                                    let src_remote = src_part.contains(':');
-                                                    let dest_remote = dest_part.contains(':');
-                                                    if src_remote && !dest_remote {
-                                                        direction = Some(crate::app::JobDirection::Download);
-                                                    } else if !src_remote && dest_remote {
-                                                        direction = Some(crate::app::JobDirection::Upload);
-                                                    } else if src_remote && dest_remote {
-                                                        direction = Some(crate::app::JobDirection::RemoteToRemote);
-                                                    } else {
-                                                        direction = Some(crate::app::JobDirection::Local);
-                                                    }
+                                            if let Some(arrow_idx) = desc.find("->") {
+                                                let src_part = &desc[..arrow_idx];
+                                                let dest_part = &desc[arrow_idx + 2..];
+                                                let src_remote = src_part.contains(':');
+                                                let dest_remote = dest_part.contains(':');
+                                                if src_remote && !dest_remote {
+                                                    direction = Some(crate::app::JobDirection::Download);
+                                                } else if !src_remote && dest_remote {
+                                                    direction = Some(crate::app::JobDirection::Upload);
+                                                } else if src_remote && dest_remote {
+                                                    direction = Some(crate::app::JobDirection::RemoteToRemote);
+                                                } else {
+                                                    direction = Some(crate::app::JobDirection::Local);
                                                 }
+                                            }
+                                        }
+
+                                        // Trích xuất tên remote từ mô tả công việc
+                                        let (src_rem, dst_rem) = parse_remotes_from_description(&desc);
+                                        if let Some(r) = src_rem {
+                                            if !source_remotes.contains(&r) {
+                                                source_remotes.push(r);
+                                            }
+                                        }
+                                        if let Some(r) = dst_rem {
+                                            if !dest_remotes.contains(&r) {
+                                                dest_remotes.push(r);
                                             }
                                         }
 
@@ -235,11 +249,25 @@ impl App {
                                                 bytes_job = st_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
                                                 size_job = st_val.get("totalBytes").and_then(|b| b.as_u64()).unwrap_or(0);
                                                 
+                                                let job_transfers = st_val.get("transferring").and_then(|t| t.as_array()).map(|t| t.len()).unwrap_or(0);
+
                                                 if let Some(dir) = direction {
                                                     match dir {
-                                                        crate::app::JobDirection::Upload => upload_speed += speed_job_f64,
-                                                        crate::app::JobDirection::Download => download_speed += speed_job_f64,
-                                                        _ => {}
+                                                        crate::app::JobDirection::Upload => {
+                                                            upload_speed += speed_job_f64;
+                                                            upload_transfers += job_transfers;
+                                                        }
+                                                        crate::app::JobDirection::Download => {
+                                                            download_speed += speed_job_f64;
+                                                            download_transfers += job_transfers;
+                                                        }
+                                                        crate::app::JobDirection::RemoteToRemote => {
+                                                            upload_speed += speed_job_f64;
+                                                            download_speed += speed_job_f64;
+                                                            upload_transfers += job_transfers;
+                                                            download_transfers += job_transfers;
+                                                        }
+                                                        crate::app::JobDirection::Local => {}
                                                     }
                                                 }
 
@@ -260,6 +288,7 @@ impl App {
 
                                                 // Thêm các file đang truyền của job này vào danh sách active
                                                 if let Some(transfers) = st_val.get("transferring").and_then(|t| t.as_array()) {
+                                                    active_transfers += transfers.len();
                                                     for t_val in transfers {
                                                         let name = t_val.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
                                                         let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
@@ -283,6 +312,7 @@ impl App {
 
                                                 // Thêm các file đang checking
                                                 if let Some(checking) = st_val.get("checking").and_then(|c| c.as_array()) {
+                                                    active_checks += checking.len();
                                                     for c_val in checking {
                                                         if let Some(name) = c_val.as_str() {
                                                             job_files.push(ui::monitor::JobFile {
@@ -354,6 +384,125 @@ impl App {
                     }
                 }
 
+                let mut bottleneck_reason = "Tốc độ tối ưu / Bình thường (Optimal)".to_string();
+                let mut is_throttled = false;
+
+                if speed > 0.0 {
+                    let config = crate::app_config::AppConfig::load();
+                    let max_bw = config.max_bandwidth_bytes_per_sec as f64;
+                    
+                    if max_bw > 0.0 && speed >= max_bw * 0.90 {
+                        bottleneck_reason = "Đạt giới hạn băng thông tối đa thiết lập (Bandwidth Limit)".to_string();
+                    } else {
+                        let avg_speed_per_transfer = if active_transfers > 0 {
+                            speed / (active_transfers as f64)
+                        } else {
+                            0.0
+                        };
+
+                        let queued_count = active.iter().flat_map(|job| &job.files).filter(|f| f.status == "queued").count();
+
+                        if active_transfers >= 16 && avg_speed_per_transfer < 30_000.0 && speed < 1_500_000.0 {
+                            let side = if upload_transfers > 0 && download_transfers == 0 {
+                                let rem_list = if dest_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(đích)", dest_remotes.join(", "))
+                                };
+                                format!(" Tải lên [{}]", rem_list)
+                            } else if download_transfers > 0 && upload_transfers == 0 {
+                                let rem_list = if source_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(nguồn)", source_remotes.join(", "))
+                                };
+                                format!(" Tải xuống [{}]", rem_list)
+                            } else if upload_transfers > 0 && download_transfers > 0 {
+                                let src_list = if source_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(nguồn)", source_remotes.join(", "))
+                                };
+                                let dst_list = if dest_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(đích)", dest_remotes.join(", "))
+                                };
+                                format!(" [{} -> {}]", src_list, dst_list)
+                            } else {
+                                "".to_string()
+                            };
+                            bottleneck_reason = format!("Bị giới hạn API Cloud{} (Throttling / Rate Limit - Mở quá nhiều luồng)", side);
+                            is_throttled = true;
+                        } else if active_transfers > 0 && active_transfers <= 3 && queued_count > 5 && speed < 2_000_000.0 {
+                            let side = if upload_transfers > 0 && download_transfers == 0 {
+                                let rem_list = if dest_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(đích)", dest_remotes.join(", "))
+                                };
+                                format!(" Tải lên [{}]", rem_list)
+                            } else if download_transfers > 0 && upload_transfers == 0 {
+                                let rem_list = if source_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(nguồn)", source_remotes.join(", "))
+                                };
+                                format!(" Tải xuống [{}]", rem_list)
+                            } else if upload_transfers > 0 && download_transfers > 0 {
+                                let src_list = if source_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(nguồn)", source_remotes.join(", "))
+                                };
+                                let dst_list = if dest_remotes.is_empty() {
+                                    "Local".to_string()
+                                } else {
+                                    format!("{}(đích)", dest_remotes.join(", "))
+                                };
+                                format!(" [{} -> {}]", src_list, dst_list)
+                            } else {
+                                "".to_string()
+                            };
+                            bottleneck_reason = format!("Nghẽn do thiếu luồng cho nhiều file nhỏ{} (Low Threads)", side);
+                        }
+                    }
+                } else if has_running_jobs {
+                    bottleneck_reason = "Đang kết nối hoặc chờ phản hồi từ Cloud (Connecting / Latency)".to_string();
+                } else {
+                    bottleneck_reason = "Không có truyền tải dữ liệu (Idle)".to_string();
+                }
+
+                // Cập nhật bộ điều tiết luồng động (Adaptive Thread Controller)
+                if is_throttled {
+                    // Giảm nhẹ hệ số nhân đi -0.5 khi gặp nghẽn API
+                    if let Ok(mut state) = crate::app::operations::DYNAMIC_THREAD_STATE.write() {
+                        state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(0.5);
+                        state.last_bottleneck_time = Some(std::time::Instant::now());
+                        state.consecutive_success_ticks = 0;
+                        crate::app_config::log_info(&format!(
+                            "[Dynamic Thread Control] Phát hiện nghẽn API! Giảm hệ số nhân xuống còn {}",
+                            state.current_transfers_multiplier
+                        ));
+                    }
+                } else if bottleneck_reason.contains("Bình thường") || bottleneck_reason.contains("Optimal") {
+                    // Dần dần tăng hệ số nhân để dò tìm Rate Limit
+                    if let Ok(mut state) = crate::app::operations::DYNAMIC_THREAD_STATE.write() {
+                        let time_since_bottleneck = state.last_bottleneck_time.map(|t| t.elapsed().as_secs()).unwrap_or(999);
+                        if time_since_bottleneck >= 12 {
+                            state.consecutive_success_ticks += 1;
+                            if state.consecutive_success_ticks >= 8 {
+                                state.current_transfers_multiplier = (state.current_transfers_multiplier + 0.25).min(4.0);
+                                state.consecutive_success_ticks = 0;
+                                crate::app_config::log_info(&format!(
+                                    "[Dynamic Thread Control] Hệ thống ổn định. Tăng hệ số nhân lên {} để thử nghiệm giới hạn API",
+                                    state.current_transfers_multiplier
+                                ));
+                            }
+                        }
+                    }
+                }
+
                 let _ = tx_clone.send(AppEvent::JobStatsUpdate {
                     speed,
                     upload_speed,
@@ -363,6 +512,7 @@ impl App {
                     active,
                     active_transfers,
                     active_checks,
+                    bottleneck_reason,
                 });
             });
         }
@@ -580,5 +730,41 @@ impl App {
                 }
             });
         }
+    }
+}
+
+fn parse_remotes_from_description(desc: &str) -> (Option<String>, Option<String>) {
+    if let Some(arrow_idx) = desc.find("->") {
+        let src_part = desc[..arrow_idx].trim();
+        let dest_part = desc[arrow_idx + 2..].trim();
+
+        let src_token = src_part.split_whitespace().last().unwrap_or("");
+        let dest_token = dest_part.split_whitespace().next().unwrap_or("");
+
+        let src_remote = if let Some(colon_idx) = src_token.find(':') {
+            let r_name = &src_token[..colon_idx];
+            if !r_name.is_empty() {
+                Some(r_name.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let dest_remote = if let Some(colon_idx) = dest_token.find(':') {
+            let r_name = &dest_token[..colon_idx];
+            if !r_name.is_empty() {
+                Some(r_name.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        (src_remote, dest_remote)
+    } else {
+        (None, None)
     }
 }

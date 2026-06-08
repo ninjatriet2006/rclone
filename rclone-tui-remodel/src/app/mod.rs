@@ -99,6 +99,7 @@ lazy_static::lazy_static! {
     pub(crate) static ref JOB_DESCRIPTIONS: std::sync::Mutex<std::collections::HashMap<i64, String>> = std::sync::Mutex::new(std::collections::HashMap::new());
     pub(crate) static ref JOB_REAL_SIZES: std::sync::Mutex<std::collections::HashMap<i64, u64>> = std::sync::Mutex::new(std::collections::HashMap::new());
     pub(crate) static ref JOB_DIRECTIONS: std::sync::Mutex<std::collections::HashMap<i64, JobDirection>> = std::sync::Mutex::new(std::collections::HashMap::new());
+    pub(crate) static ref ACTIVE_OPS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -107,6 +108,23 @@ pub enum JobDirection {
     Download,
     Local,
     RemoteToRemote,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileTask {
+    pub name: String,
+    pub size: u64,
+    pub status: TaskStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TaskStatus {
+    Pending,
+    Transferring,
+    Completed,
+    Failed,
+    Skipped,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -120,6 +138,7 @@ pub struct ActiveOperation {
     pub use_checksum: bool,
     pub is_copy: bool,
     pub completed_items: Option<Vec<String>>,
+    pub tasks: Option<Vec<FileTask>>,
 }
 
 pub fn register_job_direction(job_id: i64, direction: JobDirection) {
@@ -164,9 +183,22 @@ pub fn get_job_real_size(job_id: i64) -> Option<u64> {
     }
 }
 
-pub fn save_active_operation(op: &ActiveOperation) {
+fn load_active_operations_unlocked() -> Vec<ActiveOperation> {
     let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
+                return ops;
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub fn save_active_operation(op: &ActiveOperation) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
     ops.push(op.clone());
     if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
         let _ = std::fs::write(path, serialized);
@@ -174,11 +206,18 @@ pub fn save_active_operation(op: &ActiveOperation) {
 }
 
 pub fn complete_item_in_active_operation(id: &str, item_name: &str) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
+    let mut ops = load_active_operations_unlocked();
     let mut modified = false;
     for op in &mut ops {
         if op.id == id {
+            if let Some(ref mut tasks) = op.tasks {
+                if let Some(task) = tasks.iter_mut().find(|t| t.name == item_name) {
+                    task.status = TaskStatus::Completed;
+                    modified = true;
+                }
+            }
             if let Some(pos) = op.items.iter().position(|x| x == item_name) {
                 op.items.remove(pos);
                 if op.completed_items.is_none() {
@@ -197,9 +236,168 @@ pub fn complete_item_in_active_operation(id: &str, item_name: &str) {
     }
 }
 
-pub fn remove_active_operation(id: &str) {
+pub fn complete_items_in_active_operation(id: &str, item_names: &[String]) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
+    let mut ops = load_active_operations_unlocked();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            for item_name in item_names {
+                if let Some(ref mut tasks) = op.tasks {
+                    if let Some(task) = tasks.iter_mut().find(|t| &t.name == item_name) {
+                        task.status = TaskStatus::Completed;
+                        modified = true;
+                    }
+                }
+                if let Some(pos) = op.items.iter().position(|x| x == item_name) {
+                    op.items.remove(pos);
+                    if op.completed_items.is_none() {
+                        op.completed_items = Some(Vec::new());
+                    }
+                    op.completed_items.as_mut().unwrap().push(item_name.clone());
+                    modified = true;
+                }
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn update_task_status_in_active_operation(id: &str, item_name: &str, status: TaskStatus, error: Option<String>) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            if let Some(ref mut tasks) = op.tasks {
+                if let Some(task) = tasks.iter_mut().find(|t| t.name == item_name) {
+                    task.status = status.clone();
+                    task.error = error.clone();
+                    modified = true;
+                }
+            }
+            if status == TaskStatus::Completed {
+                if let Some(pos) = op.items.iter().position(|x| x == item_name) {
+                    op.items.remove(pos);
+                    if op.completed_items.is_none() {
+                        op.completed_items = Some(Vec::new());
+                    }
+                    op.completed_items.as_mut().unwrap().push(item_name.to_string());
+                    modified = true;
+                }
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+pub fn update_tasks_status_in_active_operation(id: &str, item_names: &[String], status: TaskStatus, error: Option<String>) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            for item_name in item_names {
+                if let Some(ref mut tasks) = op.tasks {
+                    if let Some(task) = tasks.iter_mut().find(|t| &t.name == item_name) {
+                        task.status = status.clone();
+                        task.error = error.clone();
+                        modified = true;
+                    }
+                }
+                if status == TaskStatus::Completed {
+                    if let Some(pos) = op.items.iter().position(|x| x == item_name) {
+                        op.items.remove(pos);
+                        if op.completed_items.is_none() {
+                            op.completed_items = Some(Vec::new());
+                        }
+                        op.completed_items.as_mut().unwrap().push(item_name.clone());
+                        modified = true;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+// Thêm hàm đẩy danh sách các file quét được từ Checker ngầm
+pub fn append_tasks_to_active_operation(id: &str, new_tasks: &[FileTask]) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            if op.tasks.is_none() {
+                op.tasks = Some(Vec::new());
+            }
+            let tasks = op.tasks.as_mut().unwrap();
+            for new_t in new_tasks {
+                if !tasks.iter().any(|t| t.name == new_t.name) {
+                    tasks.push(new_t.clone());
+                    modified = true;
+                }
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+pub fn prepare_active_operation_for_resume(id: &str) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            if let Some(ref mut tasks) = op.tasks {
+                for task in tasks {
+                    if task.status == TaskStatus::Transferring || task.status == TaskStatus::Failed {
+                        task.status = TaskStatus::Pending;
+                        task.error = None;
+                        modified = true;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+pub fn remove_active_operation(id: &str) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations_unlocked();
     ops.retain(|o| o.id != id);
     if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
         let _ = std::fs::write(path, serialized);
@@ -207,18 +405,12 @@ pub fn remove_active_operation(id: &str) {
 }
 
 pub fn load_active_operations() -> Vec<ActiveOperation> {
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
-                return ops;
-            }
-        }
-    }
-    Vec::new()
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    load_active_operations_unlocked()
 }
 
 pub fn clear_active_operations() {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
     let _ = std::fs::remove_file(path);
 }
@@ -267,6 +459,7 @@ pub enum AppEvent {
         active: Vec<ui::monitor::TransferJob>,
         active_transfers: usize,
         active_checks: usize,
+        bottleneck_reason: String,
     },
     OAuthFinished {
         result: Result<(), String>,
@@ -307,6 +500,7 @@ pub enum AppEvent {
     CryptdecodeResult {
         result: Result<String, String>,
     },
+    #[allow(dead_code)]
     PermissionErrorDetected {
         src: String,
         dest: String,
@@ -318,6 +512,7 @@ pub enum AppEvent {
         #[allow(dead_code)]
         total_size: u64,
     },
+    #[allow(dead_code)]
     PermissionCheckPassed {
         src: String,
         dest: String,
@@ -368,6 +563,7 @@ pub enum DeleteTarget {
     SystemdService(usize),
 }
 
+#[allow(dead_code)]
 pub(crate) struct ScanState {
     pub(crate) queue: Vec<String>,
     pub(crate) active_tasks: usize,
@@ -1064,6 +1260,7 @@ impl App {
                         active,
                         active_transfers,
                         active_checks,
+                        bottleneck_reason,
                     } => {
                         self.monitor_state.speed = speed;
                         self.monitor_state.upload_speed = upload_speed;
@@ -1073,6 +1270,7 @@ impl App {
                         self.monitor_state.active_jobs = active;
                         self.monitor_state.active_transfers = active_transfers;
                         self.monitor_state.active_checks = active_checks;
+                        self.monitor_state.bottleneck_reason = bottleneck_reason;
 
                         // Dựng lại cây thư mục node hiển thị phẳng
                         self.monitor_state.rebuild_visible_nodes();
@@ -1153,18 +1351,20 @@ impl App {
                         // Reload pane
                         self.refresh_explorer_pane(pane, tx.clone()).await;
 
-                        match result {
+                        match &result {
                             Ok(_) => {
                                 self.explorer_state.notification = Some((
                                     "THÀNH CÔNG".to_string(),
                                     format!("Đã thực hiện xong tác vụ {}", op_name),
                                 ));
+                                self.monitor_state.history.push(format!("Thành công: Đã thực hiện xong tác vụ {}", op_name));
                             }
                             Err(e) => {
                                 self.explorer_state.notification = Some((
                                     "LỖI TÁC VỤ".to_string(),
                                     format!("Lỗi khi thực hiện {}: {}", op_name, e),
                                 ));
+                                self.monitor_state.history.push(format!("Lỗi tác vụ: Lỗi khi thực hiện {}: {}", op_name, e));
                             }
                         }
                     }
@@ -1415,6 +1615,7 @@ impl App {
                                 use_checksum,
                                 is_copy: true,
                                 completed_items: Some(Vec::new()),
+                                tasks: None,
                             };
                             save_active_operation(&op);
 
@@ -1955,16 +2156,51 @@ pub(crate) async fn run_rpc_job_async_with_progress(
                     .and_then(|c| c.get("checksum"))
                     .and_then(|cs| cs.as_bool())
                     .unwrap_or(false);
+
+                // Lấy toàn bộ file đệ quy trong thư mục src nếu là tác vụ truyền tải thư mục
+                let mut items = Vec::new();
+                if method.starts_with("sync/") {
+                    let list_param = serde_json::json!({
+                        "fs": src,
+                        "remote": "",
+                        "opt": {
+                            "recurse": true
+                        }
+                    }).to_string();
+                    if let Ok(list_res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                        if list_res.status == 200 {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&list_res.output) {
+                                if let Some(list_arr) = val.get("list").and_then(|l| l.as_array()) {
+                                    for item in list_arr {
+                                        let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                                        if !is_item_dir {
+                                            if let Some(path) = item.get("Path").and_then(|p| p.as_str()) {
+                                                if !path.is_empty() {
+                                                    items.push(path.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if items.is_empty() {
+                    items.push(src.clone());
+                }
+
                 let op = ActiveOperation {
                     id: op_id.clone(),
                     action_type: if is_copy { "copy".to_string() } else { "move".to_string() },
                     src: src.clone(),
                     dest: dest.clone(),
-                    items: vec![src.clone()],
+                    items,
                     is_dir: true,
                     use_checksum,
                     is_copy,
                     completed_items: Some(Vec::new()),
+                    tasks: None,
                 };
                 save_active_operation(&op);
             }
@@ -1975,6 +2211,29 @@ pub(crate) async fn run_rpc_job_async_with_progress(
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                 if let Some((ref src, ref dest, is_copy)) = progress_info {
+                    // Cập nhật các file đã truyền thành công trong thời gian thực
+                    let transferred_res = rclone::rpc_async(
+                        "core/transferred".to_string(),
+                        serde_json::json!({ "group": format!("job/{}", id) }).to_string(),
+                    )
+                    .await;
+                    if let Ok(tr_res) = transferred_res {
+                        if let Ok(tr_val) = serde_json::from_str::<serde_json::Value>(&tr_res.output) {
+                            if let Some(transferred_arr) = tr_val.get("transferred").and_then(|t| t.as_array()) {
+                                let mut completed_names = Vec::new();
+                                for item in transferred_arr {
+                                    let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let error = item.get("error").and_then(|e| e.as_str()).unwrap_or("");
+                                    if error.is_empty() && !name.is_empty() {
+                                        completed_names.push(name.to_string());
+                                    }
+                                }
+                                if !completed_names.is_empty() {
+                                    complete_items_in_active_operation(&op_id, &completed_names);
+                                }
+                            }
+                        }
+                    }
                     if let Some(ref tx_sender) = tx {
                         if let Ok(stats_res) = rclone::rpc_async("core/stats".to_string(), json!({ "group": format!("job/{}", id) }).to_string()).await {
                             if let Ok(stats_val) = serde_json::from_str::<serde_json::Value>(&stats_res.output) {
@@ -2582,3 +2841,124 @@ pub(crate) async fn execute_restricted_copy(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_active_operation_resume_and_manipulation() {
+        let op_id = "test_op_123456";
+        
+        // Ensure it is clean first
+        remove_active_operation(op_id);
+
+        // 1. Create a dummy active operation
+        let mut tasks = Vec::new();
+        tasks.push(FileTask {
+            name: "file1.txt".to_string(),
+            size: 100,
+            status: TaskStatus::Completed,
+            error: None,
+        });
+        tasks.push(FileTask {
+            name: "file2.txt".to_string(),
+            size: 200,
+            status: TaskStatus::Failed,
+            error: Some("Old error".to_string()),
+        });
+        tasks.push(FileTask {
+            name: "file3.txt".to_string(),
+            size: 300,
+            status: TaskStatus::Transferring,
+            error: None,
+        });
+        tasks.push(FileTask {
+            name: "file4.txt".to_string(),
+            size: 400,
+            status: TaskStatus::Pending,
+            error: None,
+        });
+
+        let op = ActiveOperation {
+            id: op_id.to_string(),
+            action_type: "copy".to_string(),
+            src: "/tmp/src".to_string(),
+            dest: "/tmp/dst".to_string(),
+            items: vec!["file1.txt".to_string(), "file2.txt".to_string(), "file3.txt".to_string(), "file4.txt".to_string()],
+            is_dir: true,
+            use_checksum: false,
+            is_copy: true,
+            completed_items: Some(Vec::new()),
+            tasks: Some(tasks),
+        };
+
+        save_active_operation(&op);
+
+        // Verify loaded op has the tasks
+        let ops = load_active_operations();
+        let loaded_op = ops.iter().find(|o| o.id == op_id).expect("Should find test op");
+        assert_eq!(loaded_op.tasks.as_ref().unwrap().len(), 4);
+
+        // 2. Test append_tasks_to_active_operation
+        let new_tasks = vec![
+            FileTask {
+                name: "file4.txt".to_string(), // duplicate name, should be skipped
+                size: 400,
+                status: TaskStatus::Pending,
+                error: None,
+            },
+            FileTask {
+                name: "file5.txt".to_string(), // new task
+                size: 500,
+                status: TaskStatus::Pending,
+                error: None,
+            }
+        ];
+        append_tasks_to_active_operation(op_id, &new_tasks);
+
+        let ops = load_active_operations();
+        let loaded_op = ops.iter().find(|o| o.id == op_id).unwrap();
+        assert_eq!(loaded_op.tasks.as_ref().unwrap().len(), 5);
+        assert!(loaded_op.tasks.as_ref().unwrap().iter().any(|t| t.name == "file5.txt"));
+
+        // 3. Test prepare_active_operation_for_resume
+        prepare_active_operation_for_resume(op_id);
+
+        let ops = load_active_operations();
+        let loaded_op = ops.iter().find(|o| o.id == op_id).unwrap();
+        let tasks_after_resume = loaded_op.tasks.as_ref().unwrap();
+
+        // file1.txt was Completed, should remain Completed
+        let t1 = tasks_after_resume.iter().find(|t| t.name == "file1.txt").unwrap();
+        assert_eq!(t1.status, TaskStatus::Completed);
+
+        // file2.txt was Failed, should be reset to Pending and error cleared
+        let t2 = tasks_after_resume.iter().find(|t| t.name == "file2.txt").unwrap();
+        assert_eq!(t2.status, TaskStatus::Pending);
+        assert_eq!(t2.error, None);
+
+        // file3.txt was Transferring, should be reset to Pending
+        let t3 = tasks_after_resume.iter().find(|t| t.name == "file3.txt").unwrap();
+        assert_eq!(t3.status, TaskStatus::Pending);
+
+        // file4.txt was Pending, should remain Pending
+        let t4 = tasks_after_resume.iter().find(|t| t.name == "file4.txt").unwrap();
+        assert_eq!(t4.status, TaskStatus::Pending);
+
+        // 4. Test update_tasks_status_in_active_operation
+        update_tasks_status_in_active_operation(op_id, &["file2.txt".to_string(), "file3.txt".to_string()], TaskStatus::Completed, None);
+        
+        let ops = load_active_operations();
+        let loaded_op = ops.iter().find(|o| o.id == op_id).unwrap();
+        let tasks_after_update = loaded_op.tasks.as_ref().unwrap();
+        let t2_updated = tasks_after_update.iter().find(|t| t.name == "file2.txt").unwrap();
+        assert_eq!(t2_updated.status, TaskStatus::Completed);
+
+        // Cleanup
+        remove_active_operation(op_id);
+        let ops = load_active_operations();
+        assert!(!ops.iter().any(|o| o.id == op_id));
+    }
+}
+
