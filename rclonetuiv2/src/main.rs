@@ -107,9 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Kiểm tra Terminal Wrapping (TTY)
     crate::functions::check_terminal_wrapping();
 
-    // 3. Kiểm tra và cài đặt dependencies (FUSE)
-    ensure_dependencies();
-
     // 4. Khởi tạo Rclone Core Engine
     crate::functions::initialize();
 

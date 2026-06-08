@@ -27,6 +27,8 @@ pub mod handle_monitor_keys;
 pub mod handle_profile_keys;
 pub mod handle_language_keys;
 
+pub mod handle_dependency_keys;
+
 pub use handle_checksum_select_keys::handle_checksum_select_keys;
 pub use handle_confirm_fallback_keys::handle_confirm_fallback_keys;
 pub use handle_copy_mode_keys::handle_copy_mode_keys;
@@ -56,3 +58,4 @@ pub use handle_services_keys::handle_services_keys;
 pub use handle_monitor_keys::handle_monitor_keys;
 pub use handle_profile_keys::handle_profile_keys;
 pub use handle_language_keys::handle_language_keys;
+pub use handle_dependency_keys::handle_dependency_keys;

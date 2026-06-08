@@ -31,6 +31,67 @@ lazy_static::lazy_static! {
     pub(crate) static ref RUNNING_SIZE_CHECKS: std::sync::Mutex<std::collections::HashSet<String>> = std::sync::Mutex::new(std::collections::HashSet::new());
 }
 
+use crate::functions::widgets::structs::ActiveOperation;
+
+pub fn save_active_operation(op: &ActiveOperation) {
+    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations();
+    ops.push(op.clone());
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn complete_item_in_active_operation(id: &str, item_name: &str) {
+    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations();
+    let mut modified = false;
+    for op in &mut ops {
+        if op.id == id {
+            if let Some(pos) = op.items.iter().position(|x| x == item_name) {
+                op.items.remove(pos);
+                if op.completed_items.is_none() {
+                    op.completed_items = Some(Vec::new());
+                }
+                op.completed_items.as_mut().unwrap().push(item_name.to_string());
+                modified = true;
+            }
+            break;
+        }
+    }
+    if modified {
+        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+            let _ = std::fs::write(path, serialized);
+        }
+    }
+}
+
+pub fn remove_active_operation(id: &str) {
+    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    let mut ops = load_active_operations();
+    ops.retain(|o| o.id != id);
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn load_active_operations() -> Vec<ActiveOperation> {
+    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
+                return ops;
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub fn clear_active_operations() {
+    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    let _ = std::fs::remove_file(path);
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Screen {
     MainMenu,
@@ -40,6 +101,7 @@ pub enum Screen {
     ConfigProfileManager,
     ServicesAndMounts,
     LanguageSelect,
+    DependencyManager,
 }
 
 #[allow(dead_code)]
@@ -205,6 +267,10 @@ pub struct App {
     pub last_services_scan: std::time::Instant,
     pub last_stats_scan: std::time::Instant,
     pub stats_scan_in_progress: bool,
+    pub fuse_installed: bool,
+    pub filen_cli_installed: bool,
+    pub selected_dependency_idx: usize,
+    pub skip_permission_precheck: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Re-export key handler helper to keep key handlers imports happy
@@ -230,6 +296,32 @@ impl App {
             }
         }
 
+        let home_dir = crate::functions::get_home_dir();
+        let filen_cli_installed = std::path::Path::new(&home_dir).join(".filen-cli/bin/filen").exists();
+        let fuse_installed = crate::functions::check_fuse_dependency();
+
+        let mut monitor_state = MonitorState::new();
+        let saved_ops = load_active_operations();
+        for op in saved_ops {
+            let now_str = {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            };
+            monitor_state.failed_files.push(crate::functions::widgets::structs::FailedCopyItem {
+                src: op.src.clone(),
+                dest: op.dest.clone(),
+                error: "Tác vụ bị gián đoạn do crash / tắt đột ngột (Nhấn R để thử lại)".to_string(),
+                time: now_str,
+                is_copy: op.is_copy,
+            });
+        }
+
         App {
             screen: Screen::MainMenu,
             config,
@@ -238,7 +330,7 @@ impl App {
             menu_state: MenuState::new(),
             connection_state: ConnectionState::new(),
             explorer_state: ExplorerState::new(),
-            monitor_state: MonitorState::new(),
+            monitor_state,
             profile_state: ProfileState::new(),
             services_state: ServicesState::new(),
             available_languages,
@@ -250,6 +342,10 @@ impl App {
             last_services_scan: std::time::Instant::now(),
             last_stats_scan: std::time::Instant::now(),
             stats_scan_in_progress: false,
+            fuse_installed,
+            filen_cli_installed,
+            selected_dependency_idx: 0,
+            skip_permission_precheck: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -477,6 +573,8 @@ impl App {
 
         let tx_status = tx.clone();
         tokio::spawn(async move {
+            // Chờ 3 giây lúc khởi động để TUI vẽ giao diện xong trước, tránh nghẽn khởi động do tranh chấp lock RCLONE_ENGINE_LOCK
+            tokio::time::sleep(Duration::from_secs(3)).await;
             loop {
                 // Fetch list of remotes
                 let res =
@@ -820,6 +918,9 @@ impl App {
                         f,
                         main_layout[1],
                     ),
+                    Screen::DependencyManager => {
+                        crate::functions::widgets::draw_dependency_manager(self, f, main_layout[1])
+                    }
                 }
 
                 if let Some(ref target) = self.delete_confirm {
@@ -1236,8 +1337,7 @@ impl App {
                                     "sync/copy".to_string(),
                                     param,
                                     Some((src_clone, dest_clone, true)),
-                                    Some(tx_copy.clone()),
-                                ).await;
+                                    Some(tx_copy.clone()), None).await;
                                 let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                                     pane: ActivePane::Left,
                                     op_name: "sao chép (copy)".to_string(),
@@ -1641,44 +1741,36 @@ impl App {
                             if idx < self.services_state.systemd_services.len() {
                                 let service = self.services_state.systemd_services[idx].clone();
                                 
-                                // Stop và disable
-                                if service.is_user {
+                                // Stop, disable, delete and reload service configuration
+                                let res = if service.is_user {
                                     let _ = std::process::Command::new("systemctl")
                                         .args(["--user", "stop", &service.name])
                                         .status();
                                     let _ = std::process::Command::new("systemctl")
                                         .args(["--user", "disable", &service.name])
                                         .status();
-                                } else {
-                                    let _ = std::process::Command::new("pkexec")
-                                        .args(["systemctl", "stop", &service.name])
-                                        .status();
-                                    let _ = std::process::Command::new("pkexec")
-                                        .args(["systemctl", "disable", &service.name])
-                                        .status();
-                                }
-
-                                // Xóa file cấu hình dịch vụ
-                                let res = if service.is_user {
-                                    std::fs::remove_file(&service.file_path)
-                                } else {
-                                    std::process::Command::new("pkexec")
-                                        .args(["rm", "-f", &service.file_path])
-                                        .status()
-                                        .map(|_| ())
-                                        .map_err(|e| e)
-                                };
-
-                                // Reload daemon
-                                if service.is_user {
+                                    let r = std::fs::remove_file(&service.file_path);
                                     let _ = std::process::Command::new("systemctl")
                                         .args(["--user", "daemon-reload"])
                                         .status();
+                                    r
                                 } else {
-                                    let _ = std::process::Command::new("pkexec")
-                                        .args(["systemctl", "daemon-reload"])
+                                    let status = std::process::Command::new("pkexec")
+                                        .args([
+                                            "sh",
+                                            "-c",
+                                            "systemctl stop \"$1\" && systemctl disable \"$1\" && rm -f \"$2\" && systemctl daemon-reload",
+                                            "_",
+                                            &service.name,
+                                            &service.file_path,
+                                        ])
                                         .status();
-                                }
+                                    match status {
+                                        Ok(st) if st.success() => Ok(()),
+                                        Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pkexec commands failed")),
+                                        Err(e) => Err(e),
+                                    }
+                                };
 
                                 match res {
                                     Ok(_) => {
@@ -1732,6 +1824,7 @@ impl App {
             Screen::ConfigProfileManager => crate::functions::keys::handle_profile_keys(self, key, tx).await,
             Screen::ServicesAndMounts => crate::functions::keys::handle_services_keys(self, key, tx).await,
             Screen::LanguageSelect => crate::functions::keys::handle_language_keys(self, key).await,
+            Screen::DependencyManager => crate::functions::keys::handle_dependency_keys(self, key).await,
         }
     }
 }

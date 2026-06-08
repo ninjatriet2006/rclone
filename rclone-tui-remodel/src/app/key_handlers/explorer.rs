@@ -1777,7 +1777,7 @@ impl App {
                         let op = crate::app::ActiveOperation {
                             id: op_id.clone(),
                             action_type: "move".to_string(),
-                            src: format!("({} mục)", items.len()),
+                            src: if src_remote.is_empty() { src_path.clone() } else { format!("{}:{}", src_remote.trim_end_matches(':'), src_path) },
                             dest: dest_full.clone(),
                             items: items.iter().map(|(item_name, _)| item_name.clone()).collect(),
                             is_dir: true,

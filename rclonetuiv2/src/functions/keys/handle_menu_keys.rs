@@ -48,6 +48,10 @@ pub async fn handle_menu_keys(
                     .unwrap_or(0);
             }
             6 => {
+                app.screen = Screen::DependencyManager;
+                app.selected_dependency_idx = 0;
+            }
+            7 => {
                 app.should_exit = true;
             }
             _ => {}

@@ -28,8 +28,7 @@ pub async fn execute_fallback_action(
                         "dstFs": dest_clone,
                     }),
                     Some((src_clone, dest_clone, false)),
-                    Some(tx_move.clone()),
-                ).await;
+                    Some(tx_move.clone()), None).await;
                 let _ = tx_move.send(AppEvent::ExplorerOperationFinished {
                     pane: ActivePane::Left,
                     op_name: "di chuyển (move)".to_string(),
@@ -62,8 +61,7 @@ pub async fn execute_fallback_action(
                             "dstFs": dest_clone,
                         }),
                         Some((src_clone, dest_clone, true)),
-                        Some(tx_move.clone()),
-                    ).await
+                        Some(tx_move.clone()), None).await
                 };
                 match copy_res {
                     Ok(_) => {
@@ -116,8 +114,7 @@ pub async fn execute_fallback_action(
                     "sync/copy".to_string(),
                     param,
                     Some((src_clone, dest_clone, true)),
-                    Some(tx_copy.clone()),
-                ).await;
+                    Some(tx_copy.clone()), None).await;
                 let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                     pane: ActivePane::Left,
                     op_name: "sao chép (copy)".to_string(),
@@ -128,6 +125,19 @@ pub async fn execute_fallback_action(
         FallbackAction::DeleteNative { target, is_dir } => {
             let pane_type = app.explorer_state.active_pane.clone();
             let tx_del = tx.clone();
+            let op_id = format!("del_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+            let op = ActiveOperation {
+                id: op_id.clone(),
+                action_type: "delete".to_string(),
+                src: target.clone(),
+                dest: String::new(),
+                items: Vec::new(),
+                is_dir,
+                use_checksum: false,
+                is_copy: false,
+                completed_items: Some(Vec::new()),
+            };
+            crate::app::save_active_operation(&op);
             tokio::spawn(async move {
                 let op_name = if is_dir { "operations/purge" } else { "operations/deletefile" };
                 let param = if is_dir {
@@ -142,6 +152,7 @@ pub async fn execute_fallback_action(
                     }
                 };
                 let res = run_rpc_job_async(op_name.to_string(), param).await;
+                crate::app::remove_active_operation(&op_id);
                 let _ = tx_del.send(AppEvent::ExplorerOperationFinished {
                     pane: pane_type,
                     op_name: "Xóa tệp/thư mục".to_string(),
@@ -152,8 +163,22 @@ pub async fn execute_fallback_action(
         FallbackAction::DeleteIndividual { target } => {
             let pane_type = app.explorer_state.active_pane.clone();
             let tx_del = tx.clone();
+            let op_id = format!("del_indiv_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+            let op = ActiveOperation {
+                id: op_id.clone(),
+                action_type: "delete".to_string(),
+                src: target.clone(),
+                dest: String::new(),
+                items: Vec::new(),
+                is_dir: true,
+                use_checksum: false,
+                is_copy: false,
+                completed_items: Some(Vec::new()),
+            };
+            crate::app::save_active_operation(&op);
             tokio::spawn(async move {
                 let res = run_rpc_job_async("operations/purge".to_string(), json!({ "fs": target, "remote": "" })).await;
+                crate::app::remove_active_operation(&op_id);
                 let _ = tx_del.send(AppEvent::ExplorerOperationFinished {
                     pane: pane_type,
                     op_name: "Xóa tệp/thư mục (Dự phòng)".to_string(),
@@ -202,8 +227,7 @@ pub async fn execute_fallback_action(
                                 "dstFs": dest_clone,
                             }),
                             Some((src_clone.clone(), dest_clone.clone(), true)),
-                            Some(tx_move.clone()),
-                        ).await
+                            Some(tx_move.clone()), None).await
                     }
                 } else {
                     let (src_fs, src_file) = parse_path(&src_clone);
@@ -282,8 +306,7 @@ pub async fn execute_fallback_action(
                                 "dstFs": dest_clone,
                             }),
                             Some((src_clone.clone(), dest_clone.clone(), false)),
-                            Some(tx_move.clone()),
-                        ).await;
+                            Some(tx_move.clone()), None).await;
                         if move_res.is_err() {
                             move_res
                         } else {
@@ -382,8 +405,7 @@ pub async fn execute_fallback_action(
                     "sync/copy".to_string(),
                     param,
                     Some((src_clone, dest_clone, true)),
-                    Some(tx_copy.clone()),
-                ).await;
+                    Some(tx_copy.clone()), None).await;
                 let result = match res {
                     Ok(()) => Ok(()),
                     Err(e) => {
@@ -438,6 +460,28 @@ pub async fn execute_fallback_action(
             let dest_path_clone = dest_path.clone();
             let items_clone = items.clone();
             let pane_type = app.explorer_state.active_pane.clone();
+            let op_id = format!("multi_copy_as_much_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+            let op = ActiveOperation {
+                id: op_id.clone(),
+                action_type: "copy".to_string(),
+                src: if items_clone.is_empty() {
+                    String::new()
+                } else {
+                    let item = &items_clone[0];
+                    if item.remote.is_empty() {
+                        item.path.clone()
+                    } else {
+                        format!("{}:{}", item.remote.trim_end_matches(':'), item.path)
+                    }
+                },
+                dest: dest_full.clone(),
+                items: items_clone.iter().map(|item| item.name.clone()).collect(),
+                is_dir: true,
+                use_checksum,
+                is_copy: true,
+                completed_items: Some(Vec::new()),
+            };
+            crate::app::save_active_operation(&op);
             tokio::spawn(async move {
                 let total = items_clone.len();
                 let mut last_err = None;
@@ -500,6 +544,14 @@ pub async fn execute_fallback_action(
                     }
 
                     let res = run_rpc_job_async(method.to_string(), param).await;
+                    match &res {
+                        Ok(_) => {
+                            crate::app::complete_item_in_active_operation(&op_id, &clip_item.name);
+                        }
+                        Err(e) => {
+                            last_err = Some(e.clone());
+                        }
+                    }
                     if let Err(e) = res {
                         let err_lower = e.to_lowercase();
                         if err_lower.contains("restrictedlink")
@@ -519,6 +571,7 @@ pub async fn execute_fallback_action(
                     pct: 100.0,
                     job_id: None,
                 });
+                crate::app::remove_active_operation(&op_id);
                 let result = match last_err {
                     None => Ok(()),
                     Some(e) => Err(e),
@@ -543,6 +596,28 @@ pub async fn execute_fallback_action(
             let dest_path_clone = dest_path.clone();
             let items_clone = items.clone();
             let pane_type = app.explorer_state.active_pane.clone();
+            let op_id = format!("multi_restr_copy_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+            let op = ActiveOperation {
+                id: op_id.clone(),
+                action_type: "copy".to_string(),
+                src: if items_clone.is_empty() {
+                    String::new()
+                } else {
+                    let item = &items_clone[0];
+                    if item.remote.is_empty() {
+                        item.path.clone()
+                    } else {
+                        format!("{}:{}", item.remote.trim_end_matches(':'), item.path)
+                    }
+                },
+                dest: dest_full.clone(),
+                items: items_clone.iter().map(|item| item.name.clone()).collect(),
+                is_dir: true,
+                use_checksum,
+                is_copy: true,
+                completed_items: Some(Vec::new()),
+            };
+            crate::app::save_active_operation(&op);
             tokio::spawn(async move {
                 let total = items_clone.len();
                 let mut last_err = None;
@@ -584,8 +659,13 @@ pub async fn execute_fallback_action(
                     });
 
                     let res = execute_restricted_copy(src, dest, clip_item.is_dir, use_checksum, tx_op.clone()).await;
-                    if let Err(e) = res {
-                        last_err = Some(e);
+                    match &res {
+                        Ok(_) => {
+                            crate::app::complete_item_in_active_operation(&op_id, &clip_item.name);
+                        }
+                        Err(e) => {
+                            last_err = Some(e.clone());
+                        }
                     }
                 }
                 let _ = tx_op.send(AppEvent::CopyProgress {
@@ -594,6 +674,7 @@ pub async fn execute_fallback_action(
                     pct: 100.0,
                     job_id: None,
                 });
+                crate::app::remove_active_operation(&op_id);
                 let result = match last_err {
                     None => Ok(()),
                     Some(e) => Err(e),

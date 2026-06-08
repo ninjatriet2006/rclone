@@ -1105,10 +1105,7 @@ impl App {
                 #[cfg(unix)]
                 if need_escalation {
                     self.services_state.info_message = Some("Yêu cầu xác thực quyền root để tạo và phân quyền thư mục mount...".to_string());
-                    let _ = Command::new("pkexec")
-                        .args(&["mkdir", "-p", &mount_path])
-                        .status();
-
+                    
                     let username = std::process::Command::new("id")
                         .args(&["-u", "-n"])
                         .output()
@@ -1123,7 +1120,14 @@ impl App {
 
                     let owner_arg = format!("{}:{}", username, groupname);
                     let _ = Command::new("pkexec")
-                        .args(&["chown", "-R", &owner_arg, &mount_path])
+                        .args([
+                            "sh",
+                            "-c",
+                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                            "_",
+                            &mount_path,
+                            &owner_arg,
+                        ])
                         .status();
                 }
 
@@ -1268,19 +1272,21 @@ impl App {
             let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
         } else {
             let parent_dir = std::path::Path::new(file_path).parent().unwrap().to_string_lossy().to_string();
-            let _ = Command::new("pkexec").args(["mkdir", "-p", &parent_dir]).status();
-
             let status = Command::new("pkexec")
-                .args(["mv", &temp_file_path, file_path])
+                .args([
+                    "sh",
+                    "-c",
+                    "mkdir -p \"$1\" && mv \"$2\" \"$3\" && chown root:root \"$3\" && chmod 644 \"$3\" && systemctl daemon-reload",
+                    "_",
+                    &parent_dir,
+                    &temp_file_path,
+                    file_path,
+                ])
                 .status()?;
 
             if !status.success() {
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pkexec mv failed"));
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pkexec commands failed"));
             }
-
-            let _ = Command::new("pkexec").args(["chown", "root:root", file_path]).status();
-            let _ = Command::new("pkexec").args(["chmod", "644", file_path]).status();
-            let _ = Command::new("pkexec").args(["systemctl", "daemon-reload"]).status();
         }
 
         Ok(())
@@ -1338,10 +1344,6 @@ impl App {
                                 }
 
                                 if need_sudo {
-                                    let _ = Command::new("pkexec")
-                                        .args(&["mkdir", "-p", mount_path])
-                                        .status();
-
                                     let username = std::process::Command::new("id")
                                         .args(&["-u", "-n"])
                                         .output()
@@ -1356,7 +1358,14 @@ impl App {
 
                                     let owner_arg = format!("{}:{}", username, groupname);
                                     let _ = Command::new("pkexec")
-                                        .args(&["chown", "-R", &owner_arg, mount_path])
+                                        .args([
+                                            "sh",
+                                            "-c",
+                                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                                            "_",
+                                            mount_path,
+                                            &owner_arg,
+                                        ])
                                         .status();
                                 }
                             }
@@ -1458,25 +1467,29 @@ impl App {
                 #[cfg(unix)]
                 if need_escalation {
                     self.services_state.info_message = Some("Yêu cầu xác thực quyền root để tạo và phân quyền thư mục mount...".to_string());
-                    let _ = Command::new("pkexec")
-                        .args(&["mkdir", "-p", &local_mnt])
-                        .status();
- 
+                    
                     let username = std::process::Command::new("id")
                         .args(&["-u", "-n"])
                         .output()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                         .unwrap_or_else(|_| "bimatkeo".to_string());
- 
+
                     let groupname = std::process::Command::new("id")
                         .args(&["-g", "-n"])
                         .output()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                         .unwrap_or_else(|_| "bimatkeo".to_string());
- 
+
                     let owner_arg = format!("{}:{}", username, groupname);
                     let _ = Command::new("pkexec")
-                        .args(&["chown", "-R", &owner_arg, &local_mnt])
+                        .args([
+                            "sh",
+                            "-c",
+                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                            "_",
+                            &local_mnt,
+                            &owner_arg,
+                        ])
                         .status();
                 }
 

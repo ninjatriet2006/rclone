@@ -26,6 +26,17 @@ impl Default for AppConfig {
             active_profile: "default".to_string(),
             profiles,
             active_language: "vn".to_string(),
+            max_bandwidth_bytes_per_sec: 12_500_000,
+            retries: 3,
+            cloud_list_timeout_secs: 15,
+            stats_refresh_ms: 1500,
+            services_scan_secs: 4,
+            min_transfers: 8,
+            min_checkers: 16,
+            max_transfers: 64,
+            max_checkers: 128,
+            transfers_prior_fixed: None,
+            checkers_prior_fixed: None,
         }
     }
 }

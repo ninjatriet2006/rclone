@@ -678,8 +678,7 @@ impl App {
                             "dstFs": dest_clone,
                         }),
                         Some((src_clone, dest_clone, false)),
-                        Some(tx_move.clone()),
-                    ).await;
+                        Some(tx_move.clone()), None).await;
                     let _ = tx_move.send(AppEvent::ExplorerOperationFinished {
                         pane: ActivePane::Left,
                         op_name: "di chuyển (move)".to_string(),
@@ -1052,8 +1051,7 @@ impl App {
                             "dstFs": dest_clone,
                         }),
                         Some((src_clone, dest_clone, false)),
-                        Some(tx_move.clone()),
-                    ).await;
+                        Some(tx_move.clone()), None).await;
                     let _ = tx_move.send(AppEvent::ExplorerOperationFinished {
                         pane: ActivePane::Left,
                         op_name: "di chuyển (move)".to_string(),
@@ -1086,8 +1084,7 @@ impl App {
                                 "dstFs": dest_clone,
                             }),
                             Some((src_clone, dest_clone, true)),
-                            Some(tx_move.clone()),
-                        ).await
+                            Some(tx_move.clone()), None).await
                     };
                     match copy_res {
                         Ok(_) => {
@@ -1140,8 +1137,7 @@ impl App {
                         "sync/copy".to_string(),
                         param,
                         Some((src_clone, dest_clone, true)),
-                        Some(tx_copy.clone()),
-                    ).await;
+                        Some(tx_copy.clone()), None).await;
                     let _ = tx_copy.send(AppEvent::ExplorerOperationFinished {
                         pane: ActivePane::Left,
                         op_name: "sao chép (copy)".to_string(),
@@ -1226,8 +1222,7 @@ impl App {
                                     "dstFs": dest_clone,
                                 }),
                                 Some((src_clone.clone(), dest_clone.clone(), true)),
-                                Some(tx_move.clone()),
-                            ).await
+                                Some(tx_move.clone()), None).await
                         }
                     } else {
                         let (src_fs, src_file) = parse_path(&src_clone);
@@ -1306,8 +1301,7 @@ impl App {
                                     "dstFs": dest_clone,
                                 }),
                                 Some((src_clone.clone(), dest_clone.clone(), false)),
-                                Some(tx_move.clone()),
-                            ).await;
+                                Some(tx_move.clone()), None).await;
                             if move_res.is_err() {
                                 move_res
                             } else {
@@ -1406,8 +1400,7 @@ impl App {
                         "sync/copy".to_string(),
                         param,
                         Some((src_clone, dest_clone, true)),
-                        Some(tx_copy.clone()),
-                    ).await;
+                        Some(tx_copy.clone()), None).await;
                     let result = match res {
                         Ok(()) => Ok(()),
                         Err(e) => {
@@ -2079,8 +2072,7 @@ impl App {
                     "dstFs": dest_fs_clone,
                 }),
                 Some((archive_name_clone, dest_fs_clone, true)),
-                Some(tx_clone.clone()),
-            ).await;
+                Some(tx_clone.clone()), None).await;
             
             let _ = tx_clone.send(AppEvent::ExplorerOperationFinished {
                 pane: ActivePane::Left,
@@ -2123,8 +2115,7 @@ impl App {
                     "_description": format!("Lọc trùng: {} ({})", fs_clone, mode_clone),
                 }),
                 None,
-                Some(tx_clone.clone()),
-            ).await;
+                Some(tx_clone.clone()), None).await;
 
             let _ = tx_clone.send(AppEvent::ExplorerOperationFinished {
                 pane: ActivePane::Left,
@@ -3272,10 +3263,6 @@ pub(crate) fn parse_exec_start_full(
                 #[cfg(unix)]
                 if need_escalation {
                     self.services_state.info_message = Some("Yêu cầu xác thực quyền root để tạo và phân quyền thư mục mount...".to_string());
-                    let _ = Command::new("pkexec")
-                        .args(&["mkdir", "-p", &mount_path])
-                        .status();
-
                     let username = std::process::Command::new("id")
                         .args(&["-u", "-n"])
                         .output()
@@ -3290,7 +3277,14 @@ pub(crate) fn parse_exec_start_full(
 
                     let owner_arg = format!("{}:{}", username, groupname);
                     let _ = Command::new("pkexec")
-                        .args(&["chown", "-R", &owner_arg, &mount_path])
+                        .args([
+                            "sh",
+                            "-c",
+                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                            "_",
+                            &mount_path,
+                            &owner_arg,
+                        ])
                         .status();
                 }
 
@@ -3430,19 +3424,21 @@ pub(crate) fn parse_exec_start_full(
             let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
         } else {
             let parent_dir = std::path::Path::new(file_path).parent().unwrap().to_string_lossy().to_string();
-            let _ = Command::new("pkexec").args(["mkdir", "-p", &parent_dir]).status();
-
             let status = Command::new("pkexec")
-                .args(["mv", &temp_file_path, file_path])
+                .args([
+                    "sh",
+                    "-c",
+                    "mkdir -p \"$1\" && mv \"$2\" \"$3\" && chown root:root \"$3\" && chmod 644 \"$3\" && systemctl daemon-reload",
+                    "_",
+                    &parent_dir,
+                    &temp_file_path,
+                    file_path,
+                ])
                 .status()?;
 
             if !status.success() {
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pkexec mv failed"));
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "pkexec commands failed"));
             }
-
-            let _ = Command::new("pkexec").args(["chown", "root:root", file_path]).status();
-            let _ = Command::new("pkexec").args(["chmod", "644", file_path]).status();
-            let _ = Command::new("pkexec").args(["systemctl", "daemon-reload"]).status();
         }
 
         Ok(())
@@ -3500,10 +3496,6 @@ pub(crate) fn parse_exec_start_full(
                                 }
 
                                 if need_sudo {
-                                    let _ = Command::new("pkexec")
-                                        .args(&["mkdir", "-p", mount_path])
-                                        .status();
-
                                     let username = std::process::Command::new("id")
                                         .args(&["-u", "-n"])
                                         .output()
@@ -3518,7 +3510,14 @@ pub(crate) fn parse_exec_start_full(
 
                                     let owner_arg = format!("{}:{}", username, groupname);
                                     let _ = Command::new("pkexec")
-                                        .args(&["chown", "-R", &owner_arg, mount_path])
+                                        .args([
+                                            "sh",
+                                            "-c",
+                                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                                            "_",
+                                            mount_path,
+                                            &owner_arg,
+                                        ])
                                         .status();
                                 }
                             }
@@ -3620,25 +3619,28 @@ pub(crate) fn parse_exec_start_full(
                 #[cfg(unix)]
                 if need_escalation {
                     self.services_state.info_message = Some("Yêu cầu xác thực quyền root để tạo và phân quyền thư mục mount...".to_string());
-                    let _ = Command::new("pkexec")
-                        .args(&["mkdir", "-p", &local_mnt])
-                        .status();
- 
                     let username = std::process::Command::new("id")
                         .args(&["-u", "-n"])
                         .output()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                         .unwrap_or_else(|_| "bimatkeo".to_string());
- 
+
                     let groupname = std::process::Command::new("id")
                         .args(&["-g", "-n"])
                         .output()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                         .unwrap_or_else(|_| "bimatkeo".to_string());
- 
+
                     let owner_arg = format!("{}:{}", username, groupname);
                     let _ = Command::new("pkexec")
-                        .args(&["chown", "-R", &owner_arg, &local_mnt])
+                        .args([
+                            "sh",
+                            "-c",
+                            "mkdir -p \"$1\" && chown -R \"$2\" \"$1\"",
+                            "_",
+                            &local_mnt,
+                            &owner_arg,
+                        ])
                         .status();
                 }
 

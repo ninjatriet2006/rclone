@@ -21,6 +21,7 @@ impl MenuState {
                 "menu_4",
                 "menu_5",
                 "menu_6",
+                "menu_install_dep",
                 "menu_7",
             ],
         }
@@ -491,12 +492,26 @@ pub enum MonitorPane {
     PendingJobs,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActiveOperation {
+    pub id: String,
+    pub action_type: String, // "copy", "move", "delete", "purge", etc.
+    pub src: String,
+    pub dest: String,
+    pub items: Vec<String>,
+    pub is_dir: bool,
+    pub use_checksum: bool,
+    pub is_copy: bool,
+    pub completed_items: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FailedCopyItem {
     pub src: String,
     pub dest: String,
     pub error: String,
     pub time: String,
+    pub is_copy: bool,
 }
 
 #[derive(Debug, Clone)]

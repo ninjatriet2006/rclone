@@ -1569,7 +1569,16 @@ impl App {
                 let op = crate::app::ActiveOperation {
                     id: op_id.clone(),
                     action_type: "copy".to_string(),
-                    src: format!("({} mục)", items_clone.len()),
+                    src: if items_clone.is_empty() {
+                        String::new()
+                    } else {
+                        let item = &items_clone[0];
+                        if item.remote.is_empty() {
+                            item.path.clone()
+                        } else {
+                            format!("{}:{}", item.remote.trim_end_matches(':'), item.path)
+                        }
+                    },
                     dest: dest_full.clone(),
                     items: items_clone.iter().map(|item| item.name.clone()).collect(),
                     is_dir: true,
@@ -1689,7 +1698,16 @@ impl App {
                 let op = crate::app::ActiveOperation {
                     id: op_id.clone(),
                     action_type: "copy".to_string(),
-                    src: format!("({} mục)", items_clone.len()),
+                    src: if items_clone.is_empty() {
+                        String::new()
+                    } else {
+                        let item = &items_clone[0];
+                        if item.remote.is_empty() {
+                            item.path.clone()
+                        } else {
+                            format!("{}:{}", item.remote.trim_end_matches(':'), item.path)
+                        }
+                    },
                     dest: dest_full.clone(),
                     items: items_clone.iter().map(|item| item.name.clone()).collect(),
                     is_dir: true,

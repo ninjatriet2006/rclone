@@ -44,6 +44,7 @@ pub mod draw_select_protocol;
 pub mod draw_ask_flags;
 pub mod draw_select_systemd_action;
 pub mod draw_edit_systemd_service_wizard;
+pub mod draw_dependency_manager;
 
 pub use structs::*;
 pub use draw_header_bar::draw_header_bar;
@@ -88,3 +89,4 @@ pub use draw_select_protocol::draw_select_protocol;
 pub use draw_ask_flags::draw_ask_flags;
 pub use draw_select_systemd_action::draw_select_systemd_action;
 pub use draw_edit_systemd_service_wizard::draw_edit_systemd_service_wizard;
+pub use draw_dependency_manager::draw_dependency_manager;

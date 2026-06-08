@@ -243,6 +243,176 @@ impl App {
                                         });
                                     });
                                 } else {
+                                    // Check if there is an ActiveOperation in active_ops.json that matches this failed_item
+                                    let ops = crate::app::load_active_operations();
+                                    let matching_op = ops.into_iter().find(|op| {
+                                        op.src == src_clone && op.dest == dest_clone
+                                    });
+
+                                    if let Some(op) = matching_op {
+                                        if !op.items.is_empty() {
+                                            // It's a multi-file operation! Resume copying the remaining items.
+                                            let op_id = op.id.clone();
+                                            let items_to_copy = op.items.clone();
+                                            let dest_full = op.dest.clone();
+                                            let use_checksum = op.use_checksum;
+                                            let is_copy_action = op.is_copy;
+                                            let action_type = op.action_type.clone();
+
+                                            let (dest_remote, dest_path) = if let Some(idx) = dest_full.find(':') {
+                                                (dest_full[..idx].to_string(), dest_full[idx+1..].to_string())
+                                            } else {
+                                                (String::new(), dest_full.clone())
+                                            };
+                                            let dest_remote_clone = dest_remote.clone();
+                                            let dest_path_clone = dest_path.clone();
+
+                                            let (src_remote, src_path) = if let Some(idx) = op.src.find(':') {
+                                                (op.src[..idx].to_string(), op.src[idx+1..].to_string())
+                                            } else {
+                                                (String::new(), op.src.clone())
+                                            };
+
+                                            self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
+                                                src: format!("({} mục)", items_to_copy.len()),
+                                                dest: dest_full.clone(),
+                                                pct: 0.0,
+                                                job_id: None,
+                                            };
+                                            self.screen = Screen::FileExplorer;
+
+                                            let tx_op = tx_clone.clone();
+                                            let pane_type = self.explorer_state.active_pane.clone();
+
+                                            tokio::spawn(async move {
+                                                let mut last_err = None;
+                                                let total_count = items_to_copy.len();
+                                                for (idx, item_name) in items_to_copy.iter().enumerate() {
+                                                    let item_src = if src_remote.is_empty() {
+                                                        std::path::PathBuf::from(&src_path)
+                                                            .join(item_name)
+                                                            .to_string_lossy()
+                                                            .to_string()
+                                                    } else {
+                                                        let clean_remote = src_remote.trim_end_matches(':');
+                                                        let clean_path = if src_path.starts_with('/') {
+                                                            src_path.clone()
+                                                        } else {
+                                                            format!("/{}", src_path)
+                                                        };
+                                                        if clean_path.ends_with('/') {
+                                                            format!("{}:{}{}", clean_remote, clean_path, item_name)
+                                                        } else {
+                                                            format!("{}:{}/{}", clean_remote, clean_path, item_name)
+                                                        }
+                                                    };
+
+                                                    let item_dest = if dest_remote_clone.is_empty() {
+                                                        std::path::PathBuf::from(&dest_path_clone)
+                                                            .join(item_name)
+                                                            .to_string_lossy()
+                                                            .to_string()
+                                                    } else {
+                                                        let clean_remote = dest_remote_clone.trim_end_matches(':');
+                                                        let clean_path = if dest_path_clone.starts_with('/') {
+                                                            dest_path_clone.clone()
+                                                        } else {
+                                                            format!("/{}", dest_path_clone)
+                                                        };
+                                                        if clean_path.ends_with('/') {
+                                                            format!("{}:{}{}", clean_remote, clean_path, item_name)
+                                                        } else {
+                                                            format!("{}:{}/{}", clean_remote, clean_path, item_name)
+                                                        }
+                                                    };
+
+                                                    let pct = ((idx as f64) / total_count as f64) * 100.0;
+                                                    let progress_event = if action_type == "move" {
+                                                        AppEvent::MoveProgress {
+                                                            src: format!("({}/{}) {}", idx + 1, total_count, item_name),
+                                                            dest: item_dest.clone(),
+                                                            pct,
+                                                            job_id: None,
+                                                        }
+                                                    } else {
+                                                        AppEvent::CopyProgress {
+                                                            src: format!("({}/{}) {}", idx + 1, total_count, item_name),
+                                                            dest: item_dest.clone(),
+                                                            pct,
+                                                            job_id: None,
+                                                        }
+                                                    };
+                                                    let _ = tx_op.send(progress_event);
+
+                                                    let method = if action_type == "move" {
+                                                        "sync/move".to_string()
+                                                    } else {
+                                                        "sync/copy".to_string()
+                                                    };
+
+                                                    let mut param = json!({
+                                                        "srcFs": item_src,
+                                                        "dstFs": item_dest,
+                                                    });
+                                                    if use_checksum {
+                                                        if let Some(obj) = param.as_object_mut() {
+                                                            obj.insert("_config".to_string(), json!({ "checksum": true }));
+                                                        }
+                                                    }
+
+                                                    let res = crate::app::run_rpc_job_async_with_progress(
+                                                        method,
+                                                        param,
+                                                        Some((item_src.clone(), item_dest.clone(), is_copy_action)),
+                                                        Some(tx_op.clone()),
+                                                        None,
+                                                    ).await;
+
+                                                    match res {
+                                                        Ok(_) => {
+                                                            crate::app::complete_item_in_active_operation(&op_id, item_name);
+                                                        }
+                                                        Err(e) => {
+                                                            last_err = Some(e);
+                                                        }
+                                                    }
+                                                }
+
+                                                let progress_event_done = if action_type == "move" {
+                                                    AppEvent::MoveProgress {
+                                                        src: format!("({} mục)", total_count),
+                                                        dest: String::new(),
+                                                        pct: 100.0,
+                                                        job_id: None,
+                                                    }
+                                                } else {
+                                                    AppEvent::CopyProgress {
+                                                        src: format!("({} mục)", total_count),
+                                                        dest: String::new(),
+                                                        pct: 100.0,
+                                                        job_id: None,
+                                                    }
+                                                };
+                                                let _ = tx_op.send(progress_event_done);
+
+                                                crate::app::remove_active_operation(&op_id);
+
+                                                let final_result = match last_err {
+                                                    None => Ok(()),
+                                                    Some(e) => Err(e),
+                                                };
+
+                                                let op_label = if action_type == "move" { "di chuyển nhiều mục" } else { "sao chép nhiều mục" };
+                                                let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
+                                                    pane: pane_type,
+                                                    op_name: op_label.to_string(),
+                                                    result: final_result,
+                                                });
+                                            });
+                                            return;
+                                        }
+                                    }
+
                                     let method = if is_copy {
                                         "sync/copy".to_string()
                                     } else {
