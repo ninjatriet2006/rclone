@@ -2933,6 +2933,33 @@ pub async fn inject_optimal_thread_config(
     (transfers.max(1), checkers.max(1))
 }
 
+pub async fn check_and_apply_rate_limiting(res: &crate::rclone::SafeRpcResult) -> bool {
+    let output_lower = res.output.to_lowercase();
+    let is_throttled = res.status == 429
+        || output_lower.contains("429")
+        || output_lower.contains("ratelimitexceeded")
+        || output_lower.contains("toomanyrequests")
+        || output_lower.contains("resourceexhausted")
+        || output_lower.contains("quota exceeded")
+        || output_lower.contains("slow down")
+        || output_lower.contains("throttling")
+        || output_lower.contains("user rate limit");
+
+    if is_throttled {
+        if let Ok(mut state) = DYNAMIC_THREAD_STATE.write() {
+            state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(0.5);
+            state.last_bottleneck_time = Some(std::time::Instant::now());
+            state.consecutive_success_ticks = 0;
+            crate::app_config::log_info(&format!(
+                "[Dynamic Thread Control] Phát hiện nghẽn/giới hạn API trong checker! Giảm hệ số nhân xuống còn {}, tạm nghỉ 2 giây.",
+                state.current_transfers_multiplier
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    is_throttled
+}
+
 pub async fn start_async_checker_and_transfer(
     op_id: String,
     src: String,
@@ -2982,6 +3009,7 @@ pub async fn start_async_checker_and_transfer(
                 "opt": { "recurse": true }
             }).to_string();
             if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                check_and_apply_rate_limiting(&res).await;
                 if res.status == 200 {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
                         if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
@@ -3035,6 +3063,7 @@ pub async fn start_async_checker_and_transfer(
             let mut file_size = 0;
 
             if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                check_and_apply_rate_limiting(&res).await;
                 if res.status == 200 {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
                         if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
@@ -3119,6 +3148,7 @@ pub async fn start_async_checker_and_transfer(
             }).to_string();
 
             if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                check_and_apply_rate_limiting(&res).await;
                 if res.status == 200 {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
                         if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {

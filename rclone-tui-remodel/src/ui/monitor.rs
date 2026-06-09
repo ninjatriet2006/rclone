@@ -386,6 +386,7 @@ impl MonitorState {
 
         // 2. Hiển thị từng tác vụ hoạt động từ active_ops.json như một thư mục tiến trình
         let active_ops = crate::app::load_active_operations();
+        let pre_ops = crate::app::load_pre_operations();
         for op in &active_ops {
             let total_items = op.items.len() + op.completed_items.as_ref().map(|c| c.len()).unwrap_or(0);
             if total_items == 0 {
@@ -401,7 +402,21 @@ impl MonitorState {
             
             let op_folder_id = format!("op/{}", op.id);
             let op_expanded = self.expanded_paths.contains(&op_folder_id);
-            let task_name = if op.action_type == "copy" { "Sao chép" } else if op.action_type == "move" { "Di chuyển" } else { "Xóa" };
+            let is_scanning = pre_ops.iter().any(|po| po.id == op.id && po.status == "scanning");
+            let task_name = if is_scanning {
+                let trans_checking = crate::lang::translate("mon_action_checking");
+                if trans_checking != "mon_action_checking" {
+                    trans_checking
+                } else {
+                    "Kiểm tra".to_string()
+                }
+            } else if op.action_type == "copy" {
+                "Sao chép".to_string()
+            } else if op.action_type == "move" {
+                "Di chuyển".to_string()
+            } else {
+                "Xóa".to_string()
+            };
             
             let op_node = VisibleNode {
                 id: op_folder_id.clone(),
@@ -410,7 +425,7 @@ impl MonitorState {
                 is_job: false,
                 depth: 0,
                 expanded: op_expanded,
-                status: String::new(),
+                status: if is_scanning { "checking".to_string() } else { String::new() },
                 size: total_items as u64,
                 bytes: done_items as u64,
                 speed: 0,
@@ -451,12 +466,24 @@ impl MonitorState {
                     let is_running = self.active_jobs.iter().any(|j| {
                         j.files.iter().any(|f| f.path == *item || f.path.starts_with(&format!("{}/", item)))
                     });
-                    let mut status = if is_running { "running".to_string() } else { "queued".to_string() };
+                    let mut status = if is_scanning {
+                        "checking".to_string()
+                    } else if is_running {
+                        "running".to_string()
+                    } else {
+                        "queued".to_string()
+                    };
                     let mut error = String::new();
                     if let Some(ref tasks) = op.tasks {
                         if let Some(task) = tasks.iter().find(|t| &t.name == item) {
                             status = match task.status {
-                                crate::app::TaskStatus::Pending => "queued".to_string(),
+                                crate::app::TaskStatus::Pending => {
+                                    if is_scanning {
+                                        "checking".to_string()
+                                    } else {
+                                        "queued".to_string()
+                                    }
+                                }
                                 crate::app::TaskStatus::Transferring => "running".to_string(),
                                 crate::app::TaskStatus::Completed => "completed".to_string(),
                                 crate::app::TaskStatus::Failed => "failed".to_string(),
@@ -960,13 +987,18 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     
                     Line::from(spans)
                 } else if node.id.starts_with("op/") {
+                    let is_op_checking = node.status == "checking";
                     let mut spans = vec![
                         Span::raw(indent),
                         Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
                         Span::styled("📁 ", Style::default().fg(Color::Cyan)),
                         Span::styled(
                             format!("{} ", node.name),
-                            Style::default().add_modifier(Modifier::BOLD),
+                            if is_op_checking {
+                                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().add_modifier(Modifier::BOLD)
+                            },
                         ),
                     ];
                     
@@ -1006,7 +1038,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                 let icon = match node.status.as_str() {
                     "completed" => ("🟢 ", Color::Green),
                     "running" => ("⏳ ", Color::Yellow),
-                    "checking" => ("🔍 ", Color::Blue),
+                    "checking" => ("🔍 ", Color::Cyan),
                     "failed" => ("🔴 ", Color::Red),
                     "queued" => ("🕒 ", Color::DarkGray),
                     _ => ("📄 ", Color::Gray),
@@ -1016,7 +1048,14 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     Span::raw(indent),
                     Span::raw(expand_marker),
                     Span::styled(icon.0, Style::default().fg(icon.1)),
-                    Span::styled(node.name.clone(), Style::default()),
+                    Span::styled(
+                        node.name.clone(),
+                        if node.status == "checking" {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default()
+                        }
+                    ),
                 ];
 
                 if node.status == "failed" {

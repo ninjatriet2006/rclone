@@ -112,9 +112,16 @@ impl App {
 
                             if let Some(checking) = val.get("checking").and_then(|c| c.as_array()) {
                                 for c_val in checking {
-                                    if let Some(name) = c_val.as_str() {
+                                    let name_opt = if let Some(name) = c_val.as_str() {
+                                        Some(name.to_string())
+                                    } else if let Some(name) = c_val.get("name").and_then(|n| n.as_str()) {
+                                        Some(name.to_string())
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(name) = name_opt {
                                         files.push(ui::monitor::JobFile {
-                                            path: name.to_string(),
+                                            path: name,
                                             size: 0,
                                             bytes: 0,
                                             speed: 0,
@@ -314,9 +321,16 @@ impl App {
                                                 if let Some(checking) = st_val.get("checking").and_then(|c| c.as_array()) {
                                                     active_checks += checking.len();
                                                     for c_val in checking {
-                                                        if let Some(name) = c_val.as_str() {
+                                                        let name_opt = if let Some(name) = c_val.as_str() {
+                                                            Some(name.to_string())
+                                                        } else if let Some(name) = c_val.get("name").and_then(|n| n.as_str()) {
+                                                            Some(name.to_string())
+                                                        } else {
+                                                            None
+                                                        };
+                                                        if let Some(name) = name_opt {
                                                             job_files.push(ui::monitor::JobFile {
-                                                                path: name.to_string(),
+                                                                path: name,
                                                                 size: 0,
                                                                 bytes: 0,
                                                                 speed: 0,
@@ -499,6 +513,22 @@ impl App {
                                     state.current_transfers_multiplier
                                 ));
                             }
+                        }
+                    }
+                }
+
+                // Cộng dồn active_transfers và active_checks cho các active operations nội bộ
+                let active_ops_local = crate::app::load_active_operations();
+                let pre_ops_local = crate::app::load_pre_operations();
+                for op in &active_ops_local {
+                    let is_scanning = pre_ops_local.iter().any(|po| po.id == op.id && po.status == "scanning");
+                    if is_scanning {
+                        active_checks += 4; // giả lập 4 checkers trong quá trình kiểm tra/quét
+                    } else if let Some(ref tasks) = op.tasks {
+                        let transferring_count = tasks.iter().filter(|t| t.status == crate::app::TaskStatus::Transferring).count();
+                        active_transfers += transferring_count;
+                        if transferring_count > 0 {
+                            active_checks += 4; // giả lập 4 checkers trong quá trình copy
                         }
                     }
                 }
