@@ -147,7 +147,7 @@ pub fn parse_help_line(help_text: &str) -> Line<'static> {
                     let key_text = &part[start_idx..=end_idx];
                     spans.push(Span::styled(
                         key_text.to_string(),
-                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
                     ));
                     // Phần nhãn mô tả sau dấu ']' (ví dụ: Remote)
                     let desc_text = &part[end_idx + 1..];

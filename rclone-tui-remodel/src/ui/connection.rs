@@ -68,6 +68,34 @@ pub enum WizardState {
         features: Vec<(String, bool)>,
         union_remotes_features: Option<Vec<(String, Vec<(String, bool)>)>>,
     },
+    SelectOneChoice {
+        provider: String,
+        remote_name: String,
+        fields: Vec<(String, String, String, Vec<String>, bool)>,
+        selected_field_idx: usize,
+        scroll_offset: usize,
+        active_tab: usize,
+        selected_providers: Vec<String>,
+        is_edit_mode: bool,
+
+        field_name: String,
+        choices: Vec<String>,
+        choices_selected_idx: usize,
+    },
+    SelectMultipleChoices {
+        provider: String,
+        remote_name: String,
+        fields: Vec<(String, String, String, Vec<String>, bool)>,
+        selected_field_idx: usize,
+        scroll_offset: usize,
+        active_tab: usize,
+        selected_providers: Vec<String>,
+        is_edit_mode: bool,
+
+        field_name: String,
+        options: Vec<(String, bool)>,
+        choices_selected_idx: usize,
+    },
 }
 
 pub struct ConnectionState {
@@ -287,6 +315,98 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect, filen_cli_in
             union_remotes_features,
         } => {
             draw_show_features_popup(frame, remote_name, features, union_remotes_features);
+        }
+        WizardState::SelectOneChoice {
+            provider,
+            remote_name,
+            fields,
+            selected_field_idx,
+            scroll_offset,
+            active_tab,
+            is_edit_mode,
+            field_name,
+            choices,
+            choices_selected_idx,
+            ..
+        } => {
+            if *is_edit_mode {
+                draw_edit_setup_wizard(
+                    frame,
+                    remote_name,
+                    provider,
+                    fields,
+                    *selected_field_idx,
+                    *scroll_offset,
+                    false,
+                    "",
+                    false,
+                    "",
+                    *active_tab,
+                    0,
+                    filen_cli_installed,
+                );
+            } else {
+                draw_advanced_setup_wizard(
+                    frame,
+                    provider,
+                    remote_name,
+                    fields,
+                    *selected_field_idx,
+                    *scroll_offset,
+                    false,
+                    "",
+                    *active_tab,
+                    0,
+                    filen_cli_installed,
+                );
+            }
+            draw_select_one_choice_wizard(frame, field_name, choices, *choices_selected_idx);
+        }
+        WizardState::SelectMultipleChoices {
+            provider,
+            remote_name,
+            fields,
+            selected_field_idx,
+            scroll_offset,
+            active_tab,
+            is_edit_mode,
+            field_name,
+            options,
+            choices_selected_idx,
+            ..
+        } => {
+            if *is_edit_mode {
+                draw_edit_setup_wizard(
+                    frame,
+                    remote_name,
+                    provider,
+                    fields,
+                    *selected_field_idx,
+                    *scroll_offset,
+                    false,
+                    "",
+                    false,
+                    "",
+                    *active_tab,
+                    0,
+                    filen_cli_installed,
+                );
+            } else {
+                draw_advanced_setup_wizard(
+                    frame,
+                    provider,
+                    remote_name,
+                    fields,
+                    *selected_field_idx,
+                    *scroll_offset,
+                    false,
+                    "",
+                    *active_tab,
+                    0,
+                    filen_cli_installed,
+                );
+            }
+            draw_select_multiple_choices_wizard(frame, field_name, options, *choices_selected_idx);
         }
         WizardState::None => {}
     }
@@ -691,13 +811,15 @@ fn draw_advanced_setup_wizard(
         })
         .collect();
 
-    // Chia giao diện bên trong block viền thành các phần: Tab bar, đường chia và danh sách
+    // Chia giao diện bên trong block viền thành các phần: Tab bar, đường chia, danh sách, đường chia và hộp mô tả
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Tab bar
             Constraint::Length(1), // Divider line
             Constraint::Min(3),    // Fields list
+            Constraint::Length(1), // Divider line
+            Constraint::Length(5), // Description box
         ])
         .split(inner_area);
 
@@ -736,7 +858,7 @@ fn draw_advanced_setup_wizard(
         .skip(scroll_offset)
         .take(height)
         .map(|(i, (name, desc, value, choices, _required))| {
-            let (friendly_name, friendly_desc) = translate_field(name, desc);
+            let (friendly_name, _friendly_desc) = translate_field(name, desc);
             
             // Vẽ gợi ý các lựa chọn (choices) có sẵn ngay cạnh giá trị
             let choices_str = if !choices.is_empty() {
@@ -805,7 +927,6 @@ fn draw_advanced_setup_wizard(
                         ));
                     }
                 }
-                spans.push(Span::raw(format!(" - ({})", friendly_desc)));
                 Line::from(spans)
             } else {
                 let is_req = is_field_required(name, fields, selected_field_idx, is_editing, input_buffer);
@@ -821,7 +942,6 @@ fn draw_advanced_setup_wizard(
                         label_style,
                     ),
                     Span::styled(display_val, Style::default().fg(Color::White)),
-                    Span::raw(format!(" - ({})", friendly_desc)),
                 ])
             };
             ListItem::new(line)
@@ -898,6 +1018,26 @@ fn draw_advanced_setup_wizard(
 
     let list = List::new(items);
     frame.render_widget(list, inner_chunks[2]);
+
+    // Draw the description box
+    let current_desc = filtered_fields.get(selected_field_idx)
+        .map(|f| translate_field(&f.0, &f.1).1)
+        .unwrap_or_default();
+
+    frame.render_widget(
+        Paragraph::new("─".repeat(inner_chunks[3].width as usize))
+            .style(Style::default().fg(Color::DarkGray)),
+        inner_chunks[3],
+    );
+
+    let desc_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" MÔ TẢ / DESCRIPTION ", Style::default().fg(Color::DarkGray)));
+    let desc_paragraph = Paragraph::new(current_desc)
+        .block(desc_block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(desc_paragraph, inner_chunks[4]);
 }
 
 fn draw_edit_setup_wizard(
@@ -948,13 +1088,15 @@ fn draw_edit_setup_wizard(
         })
         .collect();
 
-    // Chia giao diện bên trong block viền thành các phần: Tab bar, đường chia và danh sách
+    // Chia giao diện bên trong block viền thành các phần: Tab bar, đường chia, danh sách, đường chia và hộp mô tả
     let inner_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Tab bar
             Constraint::Length(1), // Divider line
             Constraint::Min(3),    // Fields list
+            Constraint::Length(1), // Divider line
+            Constraint::Length(5), // Description box
         ])
         .split(inner_area);
 
@@ -993,7 +1135,7 @@ fn draw_edit_setup_wizard(
         .skip(scroll_offset)
         .take(height)
         .map(|(i, (name, desc, value, choices, _required))| {
-            let (friendly_name, friendly_desc) = translate_field(name, desc);
+            let (friendly_name, _friendly_desc) = translate_field(name, desc);
             
             // Vẽ gợi ý các lựa chọn (choices) có sẵn ngay cạnh giá trị
             let choices_str = if !choices.is_empty() {
@@ -1062,7 +1204,6 @@ fn draw_edit_setup_wizard(
                         ));
                     }
                 }
-                spans.push(Span::raw(format!(" - ({})", friendly_desc)));
                 Line::from(spans)
             } else {
                 let is_req = is_field_required(name, fields, selected_idx, is_editing, input_buffer);
@@ -1078,7 +1219,6 @@ fn draw_edit_setup_wizard(
                         label_style,
                     ),
                     Span::styled(display_val, Style::default().fg(Color::White)),
-                    Span::raw(format!(" - ({})", friendly_desc)),
                 ])
             };
             ListItem::new(line)
@@ -1155,6 +1295,26 @@ fn draw_edit_setup_wizard(
 
     let list = List::new(items);
     frame.render_widget(list, inner_chunks[2]);
+
+    // Draw the description box
+    let current_desc = filtered_fields.get(selected_idx)
+        .map(|f| translate_field(&f.0, &f.1).1)
+        .unwrap_or_default();
+
+    frame.render_widget(
+        Paragraph::new("─".repeat(inner_chunks[3].width as usize))
+            .style(Style::default().fg(Color::DarkGray)),
+        inner_chunks[3],
+    );
+
+    let desc_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" MÔ TẢ / DESCRIPTION ", Style::default().fg(Color::DarkGray)));
+    let desc_paragraph = Paragraph::new(current_desc)
+        .block(desc_block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(desc_paragraph, inner_chunks[4]);
 }
 
 pub fn draw_show_features_popup(
@@ -1389,3 +1549,122 @@ fn get_feature_description(key: &str) -> &'static str {
         _ => "Tính năng backend",
     }
 }
+
+pub fn draw_select_one_choice_wizard(
+    frame: &mut Frame,
+    field_name: &str,
+    choices: &[String],
+    selected_idx: usize,
+) {
+    let size = frame.size();
+    let area = centered_rect(50, 45, size);
+    frame.render_widget(Clear, area);
+
+    let items: Vec<ListItem> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, choice)| {
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let text = if choice == "Nhập thủ công..." {
+                format!("  ✏  {}", choice)
+            } else {
+                format!("  •  {}", choice)
+            };
+            ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let title = format!(" CHỌN GIÁ TRỊ CHO: {} ", field_name.to_uppercase());
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    // Split list and bottom help bar
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(block.inner(area));
+
+    let list = List::new(items);
+    frame.render_widget(block, area);
+    frame.render_widget(list, chunks[0]);
+
+    let help_line = Line::from(vec![
+        Span::styled(" [Mũi tên] Di chuyển | [Enter] Chọn | [Esc] Quay lại ", Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(help_line), chunks[1]);
+}
+
+pub fn draw_select_multiple_choices_wizard(
+    frame: &mut Frame,
+    field_name: &str,
+    options: &[(String, bool)],
+    selected_idx: usize,
+) {
+    let size = frame.size();
+    let area = centered_rect(55, 60, size);
+    frame.render_widget(Clear, area);
+
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, (val, checked))| {
+            let checkbox = if *checked { "[X]" } else { "[ ]" };
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("  {}  {}", checkbox, val)).style(style)
+        })
+        .collect();
+
+    let title = format!(" CHỌN NHIỀU REMOTE CHO: {} ", field_name.to_uppercase());
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    // Split list and bottom help bar
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(block.inner(area));
+
+    let list = List::new(items);
+    frame.render_widget(block, area);
+    frame.render_widget(list, chunks[0]);
+
+    let help_line = Line::from(vec![
+        Span::styled(" [Mũi tên] Di chuyển | [Space] Chọn/Bỏ chọn | [Enter] Hoàn tất | [Esc] Hủy ", Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(help_line), chunks[1]);
+}
+

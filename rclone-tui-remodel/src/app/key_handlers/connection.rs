@@ -1138,21 +1138,73 @@ impl App {
                         }
                         KeyCode::Enter => {
                             if selected_field_idx < filtered_fields.len() {
-                                is_editing = true;
-                                input_buffer = filtered_fields[selected_field_idx].2.clone();
-                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
-                                self.connection_state.wizard =
-                                    ui::connection::WizardState::AdvancedSetup {
+                                let f = &filtered_fields[selected_field_idx];
+                                let field_name = f.0.clone();
+                                if field_name == "upstreams" {
+                                    let mut options = Vec::new();
+                                    let current_vals: Vec<&str> = f.2.split_whitespace().collect();
+                                    for r in &self.connection_state.remotes {
+                                        let r_fmt = format!("{}:", r);
+                                        let checked = current_vals.iter().any(|&cv| cv == r_fmt || cv.trim_end_matches(':') == r);
+                                        options.push((r_fmt, checked));
+                                    }
+                                    self.connection_state.wizard = ui::connection::WizardState::SelectMultipleChoices {
                                         provider,
                                         remote_name,
                                         fields,
                                         selected_field_idx,
                                         scroll_offset,
-                                        is_editing,
-                                        input_buffer,
-                                        selected_providers,
                                         active_tab,
+                                        selected_providers,
+                                        is_edit_mode: false,
+                                        field_name,
+                                        options,
+                                        choices_selected_idx: 0,
                                     };
+                                } else {
+                                    let mut field_choices = f.3.clone();
+                                    let name_lower = field_name.to_lowercase();
+                                    if name_lower == "remote" {
+                                        for r in &self.connection_state.remotes {
+                                            field_choices.push(format!("{}:", r));
+                                        }
+                                    }
+                                    if !field_choices.is_empty() {
+                                        if !field_choices.contains(&"Nhập thủ công...".to_string()) {
+                                            field_choices.push("Nhập thủ công...".to_string());
+                                        }
+                                        let current_val = f.2.clone();
+                                        let choices_selected_idx = field_choices.iter().position(|c| c == &current_val).unwrap_or(0);
+                                        self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
+                                            provider,
+                                            remote_name,
+                                            fields,
+                                            selected_field_idx,
+                                            scroll_offset,
+                                            active_tab,
+                                            selected_providers,
+                                            is_edit_mode: false,
+                                            field_name,
+                                            choices: field_choices,
+                                            choices_selected_idx,
+                                        };
+                                    } else {
+                                        is_editing = true;
+                                        input_buffer = f.2.clone();
+                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                        self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                            provider,
+                                            remote_name,
+                                            fields,
+                                            selected_field_idx,
+                                            scroll_offset,
+                                            is_editing,
+                                            input_buffer,
+                                            selected_providers,
+                                            active_tab,
+                                        };
+                                    }
+                                }
                             } else if selected_field_idx == save_idx {
                                 // Kiểm tra các trường bắt buộc
                                 if let Err(missing) = validate_required_fields(&fields) {
@@ -1518,22 +1570,74 @@ impl App {
                         }
                         KeyCode::Enter => {
                             if selected_idx < filtered_fields.len() {
-                                is_editing = true;
-                                input_buffer = filtered_fields[selected_idx].2.clone();
-                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
-                                self.connection_state.wizard =
-                                    ui::connection::WizardState::EditSetup {
-                                        remote_name,
+                                let f = &filtered_fields[selected_idx];
+                                let field_name = f.0.clone();
+                                if field_name == "upstreams" {
+                                    let mut options = Vec::new();
+                                    let current_vals: Vec<&str> = f.2.split_whitespace().collect();
+                                    for r in &self.connection_state.remotes {
+                                        let r_fmt = format!("{}:", r);
+                                        let checked = current_vals.iter().any(|&cv| cv == r_fmt || cv.trim_end_matches(':') == r);
+                                        options.push((r_fmt, checked));
+                                    }
+                                    self.connection_state.wizard = ui::connection::WizardState::SelectMultipleChoices {
                                         provider,
+                                        remote_name,
                                         fields,
-                                        selected_idx,
+                                        selected_field_idx: selected_idx,
                                         scroll_offset,
-                                        is_editing,
-                                        input_buffer,
-                                        adding_new_key: false,
-                                        new_key_buffer: String::new(),
                                         active_tab,
+                                        selected_providers: Vec::new(),
+                                        is_edit_mode: true,
+                                        field_name,
+                                        options,
+                                        choices_selected_idx: 0,
                                     };
+                                } else {
+                                    let mut field_choices = f.3.clone();
+                                    let name_lower = field_name.to_lowercase();
+                                    if name_lower == "remote" {
+                                        for r in &self.connection_state.remotes {
+                                            field_choices.push(format!("{}:", r));
+                                        }
+                                    }
+                                    if !field_choices.is_empty() {
+                                        if !field_choices.contains(&"Nhập thủ công...".to_string()) {
+                                            field_choices.push("Nhập thủ công...".to_string());
+                                        }
+                                        let current_val = f.2.clone();
+                                        let choices_selected_idx = field_choices.iter().position(|c| c == &current_val).unwrap_or(0);
+                                        self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
+                                            provider,
+                                            remote_name,
+                                            fields,
+                                            selected_field_idx: selected_idx,
+                                            scroll_offset,
+                                            active_tab,
+                                            selected_providers: Vec::new(),
+                                            is_edit_mode: true,
+                                            field_name,
+                                            choices: field_choices,
+                                            choices_selected_idx,
+                                        };
+                                    } else {
+                                        is_editing = true;
+                                        input_buffer = f.2.clone();
+                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                        self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                            remote_name,
+                                            provider,
+                                            fields,
+                                            selected_idx,
+                                            scroll_offset,
+                                            is_editing,
+                                            input_buffer,
+                                            adding_new_key: false,
+                                            new_key_buffer: String::new(),
+                                            active_tab,
+                                        };
+                                    }
+                                }
                             } else if selected_idx == save_idx {
                                 // Kiểm tra các trường bắt buộc
                                 if let Err(missing) = validate_required_fields(&fields) {
@@ -1723,6 +1827,292 @@ impl App {
                 match key.code {
                     KeyCode::Esc | KeyCode::Enter => {
                         self.connection_state.wizard = ui::connection::WizardState::None;
+                    }
+                    _ => {}
+                }
+            }
+            ui::connection::WizardState::SelectOneChoice {
+                provider,
+                remote_name,
+                mut fields,
+                selected_field_idx,
+                scroll_offset,
+                active_tab,
+                selected_providers,
+                is_edit_mode,
+                field_name,
+                choices,
+                mut choices_selected_idx,
+            } => {
+                match key.code {
+                    KeyCode::Esc => {
+                        if is_edit_mode {
+                            self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                remote_name,
+                                provider,
+                                fields,
+                                selected_idx: selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                adding_new_key: false,
+                                new_key_buffer: String::new(),
+                                active_tab,
+                            };
+                        } else {
+                            self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                provider,
+                                remote_name,
+                                fields,
+                                selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                selected_providers,
+                                active_tab,
+                            };
+                        }
+                    }
+                    KeyCode::Up => {
+                        if choices_selected_idx == 0 {
+                            choices_selected_idx = choices.len() - 1;
+                        } else {
+                            choices_selected_idx -= 1;
+                        }
+                        self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
+                            provider,
+                            remote_name,
+                            fields,
+                            selected_field_idx,
+                            scroll_offset,
+                            active_tab,
+                            selected_providers,
+                            is_edit_mode,
+                            field_name,
+                            choices,
+                            choices_selected_idx,
+                        };
+                    }
+                    KeyCode::Down => {
+                        choices_selected_idx = (choices_selected_idx + 1) % choices.len();
+                        self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
+                            provider,
+                            remote_name,
+                            fields,
+                            selected_field_idx,
+                            scroll_offset,
+                            active_tab,
+                            selected_providers,
+                            is_edit_mode,
+                            field_name,
+                            choices,
+                            choices_selected_idx,
+                        };
+                    }
+                    KeyCode::Enter => {
+                        let selected_choice = &choices[choices_selected_idx];
+                        if selected_choice == "Nhập thủ công..." {
+                            if is_edit_mode {
+                                let current_val = fields.iter().find(|f| f.0 == field_name).map(|f| f.2.clone()).unwrap_or_default();
+                                self.connection_state.edit_cursor_idx = current_val.chars().count();
+                                self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                    remote_name,
+                                    provider,
+                                    fields,
+                                    selected_idx: selected_field_idx,
+                                    scroll_offset,
+                                    is_editing: true,
+                                    input_buffer: current_val,
+                                    adding_new_key: false,
+                                    new_key_buffer: String::new(),
+                                    active_tab,
+                                };
+                            } else {
+                                let current_val = fields.iter().find(|f| f.0 == field_name).map(|f| f.2.clone()).unwrap_or_default();
+                                self.connection_state.edit_cursor_idx = current_val.chars().count();
+                                self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                    provider,
+                                    remote_name,
+                                    fields,
+                                    selected_field_idx,
+                                    scroll_offset,
+                                    is_editing: true,
+                                    input_buffer: current_val,
+                                    selected_providers,
+                                    active_tab,
+                                };
+                            }
+                        } else {
+                            if let Some(real_idx) = fields.iter().position(|f| f.0 == field_name) {
+                                fields[real_idx].2 = selected_choice.clone();
+                            }
+                            if is_edit_mode {
+                                self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                    remote_name,
+                                    provider,
+                                    fields,
+                                    selected_idx: selected_field_idx,
+                                    scroll_offset,
+                                    is_editing: false,
+                                    input_buffer: String::new(),
+                                    adding_new_key: false,
+                                    new_key_buffer: String::new(),
+                                    active_tab,
+                                };
+                            } else {
+                                self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                    provider,
+                                    remote_name,
+                                    fields,
+                                    selected_field_idx,
+                                    scroll_offset,
+                                    is_editing: false,
+                                    input_buffer: String::new(),
+                                    selected_providers,
+                                    active_tab,
+                                };
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            ui::connection::WizardState::SelectMultipleChoices {
+                provider,
+                remote_name,
+                mut fields,
+                selected_field_idx,
+                scroll_offset,
+                active_tab,
+                selected_providers,
+                is_edit_mode,
+                field_name,
+                mut options,
+                mut choices_selected_idx,
+            } => {
+                match key.code {
+                    KeyCode::Esc => {
+                        if is_edit_mode {
+                            self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                remote_name,
+                                provider,
+                                fields,
+                                selected_idx: selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                adding_new_key: false,
+                                new_key_buffer: String::new(),
+                                active_tab,
+                            };
+                        } else {
+                            self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                provider,
+                                remote_name,
+                                fields,
+                                selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                selected_providers,
+                                active_tab,
+                            };
+                        }
+                    }
+                    KeyCode::Up => {
+                        if choices_selected_idx == 0 {
+                            choices_selected_idx = options.len().saturating_sub(1);
+                        } else {
+                            choices_selected_idx -= 1;
+                        }
+                        self.connection_state.wizard = ui::connection::WizardState::SelectMultipleChoices {
+                            provider,
+                            remote_name,
+                            fields,
+                            selected_field_idx,
+                            scroll_offset,
+                            active_tab,
+                            selected_providers,
+                            is_edit_mode,
+                            field_name,
+                            options,
+                            choices_selected_idx,
+                        };
+                    }
+                    KeyCode::Down => {
+                        if !options.is_empty() {
+                            choices_selected_idx = (choices_selected_idx + 1) % options.len();
+                        }
+                        self.connection_state.wizard = ui::connection::WizardState::SelectMultipleChoices {
+                            provider,
+                            remote_name,
+                            fields,
+                            selected_field_idx,
+                            scroll_offset,
+                            active_tab,
+                            selected_providers,
+                            is_edit_mode,
+                            field_name,
+                            options,
+                            choices_selected_idx,
+                        };
+                    }
+                    KeyCode::Char(' ') => {
+                        if choices_selected_idx < options.len() {
+                            options[choices_selected_idx].1 = !options[choices_selected_idx].1;
+                        }
+                        self.connection_state.wizard = ui::connection::WizardState::SelectMultipleChoices {
+                            provider,
+                            remote_name,
+                            fields,
+                            selected_field_idx,
+                            scroll_offset,
+                            active_tab,
+                            selected_providers,
+                            is_edit_mode,
+                            field_name,
+                            options,
+                            choices_selected_idx,
+                        };
+                    }
+                    KeyCode::Enter => {
+                        let selected_vals: Vec<String> = options
+                            .iter()
+                            .filter(|(_, checked)| *checked)
+                            .map(|(val, _)| val.clone())
+                            .collect();
+                        let new_val = selected_vals.join(" ");
+
+                        if let Some(real_idx) = fields.iter().position(|f| f.0 == field_name) {
+                            fields[real_idx].2 = new_val;
+                        }
+
+                        if is_edit_mode {
+                            self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                remote_name,
+                                provider,
+                                fields,
+                                selected_idx: selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                adding_new_key: false,
+                                new_key_buffer: String::new(),
+                                active_tab,
+                            };
+                        } else {
+                            self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                provider,
+                                remote_name,
+                                fields,
+                                selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                selected_providers,
+                                active_tab,
+                            };
+                        }
                     }
                     _ => {}
                 }

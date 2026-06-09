@@ -1320,7 +1320,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
     let help_text = if state.active_pane == MonitorPane::PendingJobs {
         " [Tab] Chuyển Khung | [Up/Down] Chọn | [Enter/C] Giải quyết | [Delete/D] Xóa Job | [Esc] Quay lại "
     } else if state.active_pane == MonitorPane::FailedFiles {
-        " [Tab] Chuyển Khung | [Up/Down] Chọn | [R] Thử lại tệp lỗi | [Esc] Quay lại "
+        " [Tab] Chuyển Khung | [Up/Down] Chọn | [Alt+R] Thử lại tệp lỗi | [Esc] Quay lại "
     } else {
         " [Left/Right/Space] Thu nhỏ/Mở rộng | [Up/Down] Chọn | [Delete/D] Dừng Job | [Tab] Chuyển Khung | [Esc] Quay lại "
     };

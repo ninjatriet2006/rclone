@@ -211,7 +211,7 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Char('r') | KeyCode::Char('R') => {
+                KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                     if self.monitor_state.active_pane == ui::monitor::MonitorPane::FailedFiles {
                         if !self.monitor_state.failed_files.is_empty() {
                             if self.monitor_state.selected_failed_idx < self.monitor_state.failed_files.len() {
