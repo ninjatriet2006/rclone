@@ -63,6 +63,10 @@ pub struct VisibleNode {
     pub job_id: Option<i64>,  // The job ID it belongs to
     pub job_name: String,     // Job name for stop confirmation
     pub error: String,        // Error message if failed
+    pub direct_total_children: usize,
+    pub direct_completed_children: usize,
+    pub recursive_total_size: u64,
+    pub recursive_completed_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +126,10 @@ struct TempTreeNode {
     percentage: u16,
     error: String,
     children: std::collections::BTreeMap<String, TempTreeNode>,
+    direct_total_children: usize,
+    direct_completed_children: usize,
+    recursive_total_size: u64,
+    recursive_completed_bytes: u64,
 }
 
 impl TempTreeNode {
@@ -138,6 +146,10 @@ impl TempTreeNode {
             percentage: 0,
             error: String::new(),
             children: std::collections::BTreeMap::new(),
+            direct_total_children: 0,
+            direct_completed_children: 0,
+            recursive_total_size: 0,
+            recursive_completed_bytes: 0,
         }
     }
 
@@ -155,6 +167,8 @@ impl TempTreeNode {
             node.eta = file.eta;
             node.percentage = file.percentage;
             node.error = file.error.clone();
+            node.recursive_total_size = file.size;
+            node.recursive_completed_bytes = file.bytes;
             self.children.insert(current_part, node);
         } else {
             let child_path = if self.path.is_empty() {
@@ -167,6 +181,56 @@ impl TempTreeNode {
             });
             dir_node.insert(&parts[1..], file);
         }
+    }
+
+    fn aggregate_totals(&mut self) -> (usize, usize, u64, u64, bool) {
+        if !self.is_dir {
+            let is_completed = self.status == "completed" || self.status == "skipped";
+            let comp_bytes = if is_completed { self.size } else { self.bytes };
+            self.bytes = comp_bytes;
+            self.recursive_completed_bytes = comp_bytes;
+            self.percentage = if self.size > 0 {
+                ((comp_bytes as f64 / self.size as f64) * 100.0) as u16
+            } else if is_completed {
+                100
+            } else {
+                0
+            };
+            return (0, 0, self.size, comp_bytes, is_completed);
+        }
+
+        let mut total_size = 0;
+        let mut total_bytes = 0;
+        let mut completed_children = 0;
+        let total_children = self.children.len();
+
+        for child in self.children.values_mut() {
+            let (_, _, c_size, c_bytes, c_is_completed) = child.aggregate_totals();
+            total_size += c_size;
+            total_bytes += c_bytes;
+            if c_is_completed {
+                completed_children += 1;
+            }
+        }
+
+        self.direct_total_children = total_children;
+        self.direct_completed_children = completed_children;
+        self.recursive_total_size = total_size;
+        self.recursive_completed_bytes = total_bytes;
+
+        let is_all_completed = total_children > 0 && completed_children == total_children;
+        
+        self.size = total_size;
+        self.bytes = total_bytes;
+        self.percentage = if total_size > 0 {
+            ((total_bytes as f64 / total_size as f64) * 100.0) as u16
+        } else if is_all_completed {
+            100
+        } else {
+            0
+        };
+
+        (total_children, completed_children, total_size, total_bytes, is_all_completed)
     }
 }
 
@@ -199,6 +263,10 @@ fn flatten_tree(
             job_id,
             job_name: job_name.to_string(),
             error: child.error.clone(),
+            direct_total_children: child.direct_total_children,
+            direct_completed_children: child.direct_completed_children,
+            recursive_total_size: child.recursive_total_size,
+            recursive_completed_bytes: child.recursive_completed_bytes,
         };
         
         visible_nodes.push(visible_node);
@@ -355,6 +423,10 @@ impl MonitorState {
             job_id: None,
             job_name: "Tác vụ nền".to_string(),
             error: String::new(),
+            direct_total_children: bg_jobs.len(),
+            direct_completed_children: bg_jobs.iter().filter(|j| j.percentage >= 100).count(),
+            recursive_total_size: total_size,
+            recursive_completed_bytes: total_bytes,
         };
         self.visible_nodes.push(bg_folder_node);
 
@@ -363,6 +435,13 @@ impl MonitorState {
                 let job_id_str = format!("job/{}", job.job_id.unwrap_or(0));
                 let job_expanded = self.expanded_paths.contains(&job_id_str);
                 
+                let mut root = TempTreeNode::new(String::new(), true, String::new());
+                for file in &job.files {
+                    let parts: Vec<&str> = file.path.split('/').filter(|s| !s.is_empty()).collect();
+                    root.insert(&parts, file);
+                }
+                root.aggregate_totals();
+
                 let job_node = VisibleNode {
                     id: job_id_str.clone(),
                     name: job.name.clone(),
@@ -379,16 +458,14 @@ impl MonitorState {
                     job_id: job.job_id,
                     job_name: job.name.clone(),
                     error: String::new(),
+                    direct_total_children: root.direct_total_children,
+                    direct_completed_children: root.direct_completed_children,
+                    recursive_total_size: root.recursive_total_size,
+                    recursive_completed_bytes: root.recursive_completed_bytes,
                 };
                 self.visible_nodes.push(job_node);
 
                 if job_expanded {
-                    let mut root = TempTreeNode::new(String::new(), true, String::new());
-                    for file in &job.files {
-                        let parts: Vec<&str> = file.path.split('/').filter(|s| !s.is_empty()).collect();
-                        root.insert(&parts, file);
-                    }
-                    
                     flatten_tree(
                         &root,
                         2,
@@ -402,25 +479,13 @@ impl MonitorState {
             }
         }
 
-        // 2. Hiển thị từng tác vụ hoạt động từ active_ops.json như một thư mục tiến trình
+        // 2. Hiển thị từng tác vụ hoạt động từ active_ops như một thư mục tiến trình
         let active_ops = crate::app::load_active_operations();
         let pre_ops = crate::app::load_pre_operations();
         for op in &active_ops {
-            let total_items = op.items.len() + op.completed_items.as_ref().map(|c| c.len()).unwrap_or(0);
-            if total_items == 0 {
-                continue;
-            }
-            
-            let done_items = op.completed_items.as_ref().map(|c| c.len()).unwrap_or(0);
-            let pct = if total_items > 0 {
-                ((done_items as f64 / total_items as f64) * 100.0) as u16
-            } else {
-                100
-            };
-            
+            let is_scanning = pre_ops.iter().any(|po| po.id == op.id && po.status == "scanning");
             let op_folder_id = format!("op/{}", op.id);
             let op_expanded = self.expanded_paths.contains(&op_folder_id);
-            let is_scanning = pre_ops.iter().any(|po| po.id == op.id && po.status == "scanning");
             let task_name = if is_scanning {
                 let trans_checking = crate::lang::translate("mon_action_checking");
                 if trans_checking != "mon_action_checking" {
@@ -435,7 +500,91 @@ impl MonitorState {
             } else {
                 "Xóa".to_string()
             };
+
+            let mut root = TempTreeNode::new(String::new(), true, String::new());
             
+            let task_map = op.tasks.as_ref().map(|tasks| {
+                tasks.iter()
+                    .map(|t| (t.name.as_str(), t))
+                    .collect::<std::collections::HashMap<&str, &crate::app::FileTask>>()
+            });
+
+            let completed_iter = op.completed_items.as_ref()
+                .map(|v| v.iter().map(|item| (item, true)))
+                .into_iter()
+                .flatten();
+            let queued_iter = op.items.iter().map(|item| (item, false));
+            
+            for (item, is_completed) in completed_iter.chain(queued_iter) {
+                let size = task_map.as_ref()
+                    .and_then(|map| map.get(item.as_str()))
+                    .map(|t| t.size)
+                    .unwrap_or(0);
+
+                let mut status = if is_completed {
+                    "completed".to_string()
+                } else if is_scanning {
+                    "checking".to_string()
+                } else if running_paths.contains(item) {
+                    "running".to_string()
+                } else {
+                    "queued".to_string()
+                };
+                let mut error = String::new();
+                let mut bytes = 0;
+
+                if let Some(ref map) = task_map {
+                    if let Some(task) = map.get(item.as_str()) {
+                        status = match task.status {
+                            crate::app::TaskStatus::Pending => {
+                                if is_scanning {
+                                    "checking".to_string()
+                                } else {
+                                    "queued".to_string()
+                                }
+                            }
+                            crate::app::TaskStatus::Transferring => "running".to_string(),
+                            crate::app::TaskStatus::Completed => "completed".to_string(),
+                            crate::app::TaskStatus::Failed => "failed".to_string(),
+                            crate::app::TaskStatus::Skipped => "skipped".to_string(),
+                        };
+                        if status == "completed" || status == "skipped" {
+                            bytes = size;
+                        }
+                        if let Some(ref err) = task.error {
+                            error = err.clone();
+                        }
+                    }
+                } else if is_completed {
+                    status = "completed".to_string();
+                    bytes = size;
+                }
+
+                let percentage = if size > 0 {
+                    ((bytes as f64 / size as f64) * 100.0) as u16
+                } else if is_completed || status == "completed" || status == "skipped" {
+                    100
+                } else {
+                    0
+                };
+
+                let job_file = JobFile {
+                    path: item.to_string(),
+                    size,
+                    bytes,
+                    speed: 0,
+                    percentage,
+                    eta: -1,
+                    status,
+                    error,
+                };
+
+                let parts: Vec<&str> = item.split('/').filter(|s| !s.is_empty()).collect();
+                root.insert(&parts, &job_file);
+            }
+
+            root.aggregate_totals();
+
             let op_node = VisibleNode {
                 id: op_folder_id.clone(),
                 name: format!("{} - {}", op.id, task_name),
@@ -444,96 +593,22 @@ impl MonitorState {
                 depth: 0,
                 expanded: op_expanded,
                 status: if is_scanning { "checking".to_string() } else { String::new() },
-                size: total_items as u64,
-                bytes: done_items as u64,
+                size: root.recursive_total_size,
+                bytes: root.recursive_completed_bytes,
                 speed: 0,
                 eta: -1,
-                percentage: pct,
+                percentage: root.percentage,
                 job_id: None,
                 job_name: op.id.clone(),
                 error: String::new(),
+                direct_total_children: root.direct_total_children,
+                direct_completed_children: root.direct_completed_children,
+                recursive_total_size: root.recursive_total_size,
+                recursive_completed_bytes: root.recursive_completed_bytes,
             };
             self.visible_nodes.push(op_node);
             
             if op_expanded {
-                let mut root = TempTreeNode::new(String::new(), true, String::new());
-                
-                let task_map = op.tasks.as_ref().map(|tasks| {
-                    tasks.iter()
-                        .map(|t| (t.name.as_str(), t))
-                        .collect::<std::collections::HashMap<&str, &crate::app::FileTask>>()
-                });
-
-                let completed_iter = op.completed_items.as_ref()
-                    .map(|v| v.iter().map(|item| (item, true)))
-                    .into_iter()
-                    .flatten();
-                let queued_iter = op.items.iter().map(|item| (item, false));
-                
-                for (item, is_completed) in completed_iter.chain(queued_iter) {
-                    let mut size = 0;
-                    let mut bytes = 0;
-                    let mut status = if is_completed {
-                        "completed".to_string()
-                    } else if is_scanning {
-                        "checking".to_string()
-                    } else if running_paths.contains(item) {
-                        "running".to_string()
-                    } else {
-                        "queued".to_string()
-                    };
-                    let mut error = String::new();
-
-                    if let Some(ref map) = task_map {
-                        if let Some(task) = map.get(item.as_str()) {
-                            size = task.size;
-                            status = match task.status {
-                                crate::app::TaskStatus::Pending => {
-                                    if is_scanning {
-                                        "checking".to_string()
-                                    } else {
-                                        "queued".to_string()
-                                    }
-                                }
-                                crate::app::TaskStatus::Transferring => "running".to_string(),
-                                crate::app::TaskStatus::Completed => "completed".to_string(),
-                                crate::app::TaskStatus::Failed => "failed".to_string(),
-                                crate::app::TaskStatus::Skipped => "skipped".to_string(),
-                            };
-                            if status == "completed" || status == "skipped" {
-                                bytes = size;
-                            }
-                            if let Some(ref err) = task.error {
-                                error = err.clone();
-                            }
-                        }
-                    } else if is_completed {
-                        status = "completed".to_string();
-                    }
-
-                    let percentage = if size > 0 {
-                        ((bytes as f64 / size as f64) * 100.0) as u16
-                    } else if is_completed || status == "completed" || status == "skipped" {
-                        100
-                    } else {
-                        0
-                    };
-
-                    let job_file = JobFile {
-                        path: item.to_string(),
-                        size,
-                        bytes,
-                        speed: 0,
-                        percentage,
-                        eta: -1,
-                        status,
-                        error,
-                    };
-
-                    let parts: Vec<&str> = item.split('/').filter(|s| !s.is_empty()).collect();
-                    root.insert(&parts, &job_file);
-                }
-
                 flatten_tree(
                     &root,
                     1,
@@ -551,6 +626,13 @@ impl MonitorState {
             let job_id_str = format!("job/{}", job.job_id.unwrap_or(0));
             let job_expanded = self.expanded_paths.contains(&job_id_str);
             
+            let mut root = TempTreeNode::new(String::new(), true, String::new());
+            for file in &job.files {
+                let parts: Vec<&str> = file.path.split('/').filter(|s| !s.is_empty()).collect();
+                root.insert(&parts, file);
+            }
+            root.aggregate_totals();
+
             let job_node = VisibleNode {
                 id: job_id_str.clone(),
                 name: job.name.clone(),
@@ -567,16 +649,14 @@ impl MonitorState {
                 job_id: job.job_id,
                 job_name: job.name.clone(),
                 error: String::new(),
+                direct_total_children: root.direct_total_children,
+                direct_completed_children: root.direct_completed_children,
+                recursive_total_size: root.recursive_total_size,
+                recursive_completed_bytes: root.recursive_completed_bytes,
             };
             self.visible_nodes.push(job_node);
 
             if job_expanded {
-                let mut root = TempTreeNode::new(String::new(), true, String::new());
-                for file in &job.files {
-                    let parts: Vec<&str> = file.path.split('/').filter(|s| !s.is_empty()).collect();
-                    root.insert(&parts, file);
-                }
-                
                 flatten_tree(
                     &root,
                     1,
@@ -992,7 +1072,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                         ),
                     ];
                     
-                    if node.size > 0 {
+                    if node.direct_total_children > 0 {
                         let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, Color::Yellow);
                         spans.push(Span::raw(" "));
                         spans.extend(bar_spans);
@@ -1002,9 +1082,17 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                         ));
                         spans.push(Span::styled(
                             format!(
+                                "({} / {} mục) ",
+                                node.direct_completed_children,
+                                node.direct_total_children
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                        spans.push(Span::styled(
+                            format!(
                                 "({} / {}) ",
-                                super::format_size(node.bytes),
-                                super::format_size(node.size)
+                                super::format_size(node.recursive_completed_bytes),
+                                super::format_size(node.recursive_total_size)
                             ),
                             Style::default().fg(Color::DarkGray),
                         ));
@@ -1034,7 +1122,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                         ),
                     ];
                     
-                    if node.size > 0 {
+                    if node.direct_total_children > 0 {
                         let bar_color = if is_op_checking { Color::Cyan } else { Color::Yellow };
                         let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, bar_color);
                         spans.push(Span::raw(" "));
@@ -1046,15 +1134,23 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                         spans.push(Span::styled(
                             format!(
                                 "({} / {} mục) ",
-                                node.bytes,
-                                node.size
+                                node.direct_completed_children,
+                                node.direct_total_children
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                        spans.push(Span::styled(
+                            format!(
+                                "({} / {}) ",
+                                super::format_size(node.recursive_completed_bytes),
+                                super::format_size(node.recursive_total_size)
                             ),
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
                     Line::from(spans)
                 } else {
-                    let spans = vec![
+                    let mut spans = vec![
                         Span::raw(indent),
                         Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
                         Span::styled("📁 ", Style::default().fg(Color::Cyan)),
@@ -1063,6 +1159,32 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                     ];
+                    
+                    if node.direct_total_children > 0 {
+                        let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, Color::Yellow);
+                        spans.push(Span::raw(" "));
+                        spans.extend(bar_spans);
+                        spans.push(Span::styled(
+                            format!(" {}% ", node.percentage),
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::styled(
+                            format!(
+                                "({} / {} mục) ",
+                                node.direct_completed_children,
+                                node.direct_total_children
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                        spans.push(Span::styled(
+                            format!(
+                                "({} / {}) ",
+                                super::format_size(node.recursive_completed_bytes),
+                                super::format_size(node.recursive_total_size)
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
                     Line::from(spans)
                 };
                 line
@@ -1409,7 +1531,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
     } else if state.active_pane == MonitorPane::FailedFiles {
         " [Tab] Chuyển Khung | [Up/Down] Chọn | [Alt+R] Thử lại tệp lỗi | [Esc] Quay lại "
     } else {
-        " [Left/Right/Space] Thu nhỏ/Mở rộng | [Up/Down] Chọn | [Delete/D] Dừng Job | [Tab] Chuyển Khung | [Esc] Quay lại "
+        " [Left/Right/Space] Thu nhỏ/Mở rộng | [Up/Down] Chọn | [Delete/D] Dừng Job | [_] Xóa xong (Clear) | [Tab] Chuyển Khung | [Esc] Quay lại "
     };
     let help_paragraph = Paragraph::new(
         super::parse_help_line(help_text),

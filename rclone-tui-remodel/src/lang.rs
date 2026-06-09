@@ -16,27 +16,49 @@ pub fn init_languages() {
     let default_vn = r#"# Rclone-TUI Vietnamese Translations
 unikey_tip: "💡 Mẹo: Nếu Unikey tự chuyển dấu sai (ví dụ Telex), hãy tắt bộ gõ tiếng Việt (chuyển sang chữ E) trong hệ điều hành."
 remote: "Remote nguồn cần mã hóa (ví dụ: Telebox:ThuMucGoc)"
+remote_friendly: "Remote nguồn"
 filename_encryption: "Cách mã hóa tên file: standard (mặc định), off (tắt), base32"
+filename_encryption_friendly: "Mã hóa tên file"
 directory_name_encryption: "Mã hóa tên thư mục: true (bật) hoặc false (tắt)"
+directory_name_encryption_friendly: "Mã hóa tên thư mục"
 password: "Mật khẩu dùng để mã hóa dữ liệu của bạn"
+password_friendly: "Mật khẩu"
 password2: "Mật khẩu Salt bổ sung (tùy chọn nhưng khuyến nghị, nên khác mật khẩu chính)"
+password2_friendly: "Mật khẩu Salt phụ"
 client_id: "OAuth Client ID của ứng dụng (để trống nếu dùng mặc định)"
+client_id_friendly: "Client ID"
 client_secret: "OAuth Client Secret của ứng dụng (để trống nếu dùng mặc định)"
+client_secret_friendly: "Client Secret"
 description: "Mô tả ngắn gọn cho kết nối này"
+description_friendly: "Mô tả"
 token: "OAuth access token (thường được tạo tự động)"
+token_friendly: "Access Token"
 filename_encoding: "Cách mã hóa tên file đã mã hóa thành chuỗi văn bản (rút ngắn tên file)."
+filename_encoding_friendly: "Mã hóa chuỗi tên"
 no_data_encryption: "Tùy chọn mã hóa dữ liệu file hoặc để nguyên không mã hóa."
+no_data_encryption_friendly: "Mã hóa dữ liệu file"
 pass_bad_blocks: "Nếu bật, các block bị lỗi (bad blocks) sẽ được bỏ qua dưới dạng dữ liệu toàn số 0."
+pass_bad_blocks_friendly: "Bỏ qua block lỗi"
 server_side_across_configs: "Cho phép các thao tác trực tiếp trên server (ví dụ: copy) hoạt động giữa các cấu hình khác nhau."
+server_side_across_configs_friendly: "Copy xuyên Server"
 show_mapping: "Hiển thị cách ánh xạ mã hóa tên của các tệp tin trong log."
+show_mapping_friendly: "Hiển thị ánh xạ"
 strict_names: "Nếu bật, sẽ báo lỗi nếu gặp file không thể giải mã tên (mặc định rclone chỉ cảnh báo)."
+strict_names_friendly: "Bắt buộc giải mã tên"
 suffix: "Hậu tố phần mở rộng cho các file mã hóa (mặc định là .bin)."
+suffix_friendly: "Hậu tố mở rộng"
 upstreams: "Danh sách các remote thành phần (upstreams), phân tách bằng khoảng trắng. Ví dụ: 'remote1:test/dir remote2:', '\"remote1:test/space:ro dir\" remote2:', v.v."
+upstreams_friendly: "Upstreams"
 action_policy: "Chính sách lựa chọn remote thành phần cho các thao tác ACTION."
+action_policy_friendly: "Chính sách ACTION"
 create_policy: "Chính sách lựa chọn remote thành phần cho các thao tác CREATE."
+create_policy_friendly: "Chính sách CREATE"
 search_policy: "Chính sách lựa chọn remote thành phần cho các thao tác SEARCH."
+search_policy_friendly: "Chính sách SEARCH"
 cache_time: "Thời gian lưu tạm thông tin sử dụng và dung lượng trống (tính bằng giây). Chỉ có tác dụng khi dùng chính sách bảo toàn đường dẫn (path preserving)."
+cache_time_friendly: "Thời gian cache"
 min_free_space: "Dung lượng trống tối thiểu cần thiết cho các chính sách lfs/eplfs. Nếu một remote có ít hơn dung lượng này, nó sẽ không được xem xét."
+min_free_space_friendly: "Dung lượng trống tối thiểu"
 tip_select_remote: "💡 Sử dụng Mũi tên Lên/Xuống hoặc Trái/Phải để chọn Remote có sẵn"
 tip_select_choice: "💡 Sử dụng Mũi tên Lên/Xuống hoặc Trái/Phải để chọn giá trị"
 help_editing: "[Enter] Hoàn tất nhập | [ESC] Hủy nhập"
@@ -673,7 +695,7 @@ fn merge_missing_keys(path: &std::path::Path, defaults: &str) {
     if let Ok(default_map) = serde_yaml::from_str::<HashMap<String, String>>(defaults) {
         let mut modified = false;
         for (k, v) in default_map {
-            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k.starts_with("menu_") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint" || k == "conn_insert_api_key_hint" || k == "conn_insert_api_key_missing_hint" || k == "srv_mount_fuse_missing_hint";
+            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k.ends_with("_friendly") || k.starts_with("menu_") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint" || k == "conn_insert_api_key_hint" || k == "conn_insert_api_key_missing_hint" || k == "srv_mount_fuse_missing_hint";
             if !current_map.contains_key(&k) || is_help_key {
                 if current_map.get(&k) != Some(&v) {
                     current_map.insert(k, v);
@@ -784,4 +806,11 @@ pub fn translate_desc(field_name: &str, english_desc: &str) -> String {
 /// Dịch các mẹo/lưu ý trên giao diện
 pub fn translate_tip(tip_key: &str) -> String {
     translate(tip_key)
+}
+
+/// Dịch tên thân thiện của các tùy chọn cấu hình
+pub fn translate_friendly(field_name: &str) -> Option<String> {
+    let trans = TRANSLATIONS.read().unwrap();
+    let key = format!("{}_friendly", field_name);
+    trans.get(&key).cloned()
 }

@@ -561,6 +561,18 @@ impl App {
                         self.monitor_state.toggle_expand();
                     }
                 }
+                KeyCode::Char('_') => {
+                    let rx_res = rclone::rpc_async("core/stats-reset".to_string(), "{}".to_string()).await;
+                    let msg = match rx_res {
+                        Ok(_) => {
+                            self.monitor_state.failed_files.clear();
+                            self.monitor_state.selected_failed_idx = 0;
+                            "Đã dọn dẹp danh sách các tác vụ hoàn thành (Clear completed).".to_string()
+                        }
+                        Err(e) => format!("Lỗi khi dọn dẹp tác vụ: {}", e),
+                    };
+                    self.monitor_state.history.push(msg);
+                }
                 _ => {}
             }
         }

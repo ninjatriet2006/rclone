@@ -679,7 +679,11 @@ pub fn translate_field(name: &str, desc: &str) -> (String, String) {
     if name == "_remote_name" {
         return ("Tên Remote (Remote Name)".to_string(), desc.to_string());
     }
-    let friendly_name = name.to_string(); // Giữ nguyên mẫu ID từ rclone gốc theo yêu cầu của user
+    let friendly_name = if let Some(friendly) = crate::lang::translate_friendly(name) {
+        format!("{} ({})", name, friendly)
+    } else {
+        name.to_string()
+    };
     let friendly_desc = crate::lang::translate_desc(name, desc);
     (friendly_name, friendly_desc)
 }
