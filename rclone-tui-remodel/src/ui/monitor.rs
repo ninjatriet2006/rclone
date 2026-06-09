@@ -98,6 +98,8 @@ pub struct MonitorState {
     pub max_bandwidth: u64,
     pub active_transfers: usize,
     pub active_checks: usize,
+    pub transfers_limit: usize,
+    pub checkers_limit: usize,
     pub bottleneck_reason: String,
     // tree states
     pub expanded_paths: std::collections::HashSet<String>,
@@ -287,6 +289,8 @@ impl MonitorState {
             max_bandwidth: 12_500_000,
             active_transfers: 0,
             active_checks: 0,
+            transfers_limit: 8,
+            checkers_limit: 16,
             bottleneck_reason: "Tốc độ tối ưu / Bình thường (Optimal)".to_string(),
             expanded_paths,
             visible_nodes: Vec::new(),
@@ -299,6 +303,20 @@ impl MonitorState {
 
     pub fn rebuild_visible_nodes(&mut self) {
         self.visible_nodes.clear();
+        
+        let mut running_paths = std::collections::HashSet::new();
+        for j in &self.active_jobs {
+            for f in &j.files {
+                running_paths.insert(f.path.clone());
+                let mut path = f.path.as_str();
+                while let Some(idx) = path.rfind('/') {
+                    path = &path[..idx];
+                    if !path.is_empty() {
+                        running_paths.insert(path.to_string());
+                    }
+                }
+            }
+        }
         
         let mut bg_jobs = Vec::new();
         let mut user_jobs = Vec::new();
@@ -438,44 +456,37 @@ impl MonitorState {
             self.visible_nodes.push(op_node);
             
             if op_expanded {
-                // Thêm completed items
-                if let Some(ref completed) = op.completed_items {
-                    for item in completed {
-                        self.visible_nodes.push(VisibleNode {
-                            id: format!("op/{}/completed/{}", op.id, item),
-                            name: item.clone(),
-                            is_dir: false,
-                            is_job: false,
-                            depth: 1,
-                            expanded: false,
-                            status: "completed".to_string(),
-                            size: 0,
-                            bytes: 0,
-                            speed: 0,
-                            eta: -1,
-                            percentage: 100,
-                            job_id: None,
-                            job_name: String::new(),
-                            error: String::new(),
-                        });
-                    }
-                }
+                let mut root = TempTreeNode::new(String::new(), true, String::new());
                 
-                // Thêm queued items
-                for item in &op.items {
-                    let is_running = self.active_jobs.iter().any(|j| {
-                        j.files.iter().any(|f| f.path == *item || f.path.starts_with(&format!("{}/", item)))
-                    });
-                    let mut status = if is_scanning {
+                let task_map = op.tasks.as_ref().map(|tasks| {
+                    tasks.iter()
+                        .map(|t| (t.name.as_str(), t))
+                        .collect::<std::collections::HashMap<&str, &crate::app::FileTask>>()
+                });
+
+                let completed_iter = op.completed_items.as_ref()
+                    .map(|v| v.iter().map(|item| (item, true)))
+                    .into_iter()
+                    .flatten();
+                let queued_iter = op.items.iter().map(|item| (item, false));
+                
+                for (item, is_completed) in completed_iter.chain(queued_iter) {
+                    let mut size = 0;
+                    let mut bytes = 0;
+                    let mut status = if is_completed {
+                        "completed".to_string()
+                    } else if is_scanning {
                         "checking".to_string()
-                    } else if is_running {
+                    } else if running_paths.contains(item) {
                         "running".to_string()
                     } else {
                         "queued".to_string()
                     };
                     let mut error = String::new();
-                    if let Some(ref tasks) = op.tasks {
-                        if let Some(task) = tasks.iter().find(|t| &t.name == item) {
+
+                    if let Some(ref map) = task_map {
+                        if let Some(task) = map.get(item.as_str()) {
+                            size = task.size;
                             status = match task.status {
                                 crate::app::TaskStatus::Pending => {
                                     if is_scanning {
@@ -489,30 +500,49 @@ impl MonitorState {
                                 crate::app::TaskStatus::Failed => "failed".to_string(),
                                 crate::app::TaskStatus::Skipped => "skipped".to_string(),
                             };
+                            if status == "completed" || status == "skipped" {
+                                bytes = size;
+                            }
                             if let Some(ref err) = task.error {
                                 error = err.clone();
                             }
                         }
+                    } else if is_completed {
+                        status = "completed".to_string();
                     }
-                    
-                    self.visible_nodes.push(VisibleNode {
-                        id: format!("op/{}/queued/{}", op.id, item),
-                        name: item.clone(),
-                        is_dir: false,
-                        is_job: false,
-                        depth: 1,
-                        expanded: false,
-                        status,
-                        size: 0,
-                        bytes: 0,
+
+                    let percentage = if size > 0 {
+                        ((bytes as f64 / size as f64) * 100.0) as u16
+                    } else if is_completed || status == "completed" || status == "skipped" {
+                        100
+                    } else {
+                        0
+                    };
+
+                    let job_file = JobFile {
+                        path: item.to_string(),
+                        size,
+                        bytes,
                         speed: 0,
+                        percentage,
                         eta: -1,
-                        percentage: 0,
-                        job_id: None,
-                        job_name: String::new(),
+                        status,
                         error,
-                    });
+                    };
+
+                    let parts: Vec<&str> = item.split('/').filter(|s| !s.is_empty()).collect();
+                    root.insert(&parts, &job_file);
                 }
+
+                flatten_tree(
+                    &root,
+                    1,
+                    &op_folder_id,
+                    None,
+                    &op.id,
+                    &self.expanded_paths,
+                    &mut self.visible_nodes,
+                );
             }
         }
 
@@ -667,6 +697,7 @@ fn make_colored_progress_bar(
     width: usize,
     is_active: bool,
     is_error: bool,
+    cursor_color: Color,
 ) -> Vec<Span<'static>> {
     let percentage = percentage.min(100) as usize;
     let mut spans = vec![Span::styled("[", Style::default().fg(Color::Gray))];
@@ -689,7 +720,7 @@ fn make_colored_progress_bar(
             spans.push(Span::styled("█".repeat(filled_green), Style::default().fg(Color::Green)));
         }
         if filled_yellow > 0 {
-            spans.push(Span::styled("█", Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled("█", Style::default().fg(cursor_color)));
         }
         if filled_white > 0 {
             spans.push(Span::styled("░".repeat(filled_white), Style::default().fg(Color::White)));
@@ -789,6 +820,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
         25,
         !state.active_jobs.is_empty(),
         !state.failed_files.is_empty(),
+        Color::Yellow,
     ));
     pct_line_spans.push(Span::styled(
         format!(" {:.1}%", progress_pct),
@@ -904,7 +936,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
 
             let line = if node.is_job {
                 let expand_marker = if node.expanded { "▼ " } else { "▶ " };
-                let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false);
+                let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, Color::Yellow);
                 let eta_str = if node.eta >= 0 {
                     format!("ETA: {}s", node.eta)
                 } else {
@@ -961,7 +993,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     ];
                     
                     if node.size > 0 {
-                        let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false);
+                        let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, Color::Yellow);
                         spans.push(Span::raw(" "));
                         spans.extend(bar_spans);
                         spans.push(Span::styled(
@@ -1003,7 +1035,8 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     ];
                     
                     if node.size > 0 {
-                        let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false);
+                        let bar_color = if is_op_checking { Color::Cyan } else { Color::Yellow };
+                        let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, bar_color);
                         spans.push(Span::raw(" "));
                         spans.extend(bar_spans);
                         spans.push(Span::styled(
@@ -1064,7 +1097,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                         Style::default().fg(Color::Red),
                     ));
                 } else if node.status == "running" {
-                    let bar_spans = make_colored_progress_bar(node.percentage, 10, true, false);
+                    let bar_spans = make_colored_progress_bar(node.percentage, 10, true, false, Color::Yellow);
                     spans.push(Span::raw(" "));
                     spans.extend(bar_spans);
                     spans.push(Span::styled(
@@ -1169,7 +1202,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
             };
 
             let has_errors = job.status == "Scanned (Has Restrictions)";
-            let bar_spans = make_colored_progress_bar(0, 12, false, has_errors);
+            let bar_spans = make_colored_progress_bar(0, 12, false, has_errors, Color::Yellow);
 
             let mut spans = vec![
                 Span::styled("⚠️ ", Style::default().fg(Color::Yellow)),

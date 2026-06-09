@@ -21,6 +21,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+pub mod db;
+
 pub(crate) fn handle_input_key(
     key: &crossterm::event::KeyEvent,
     input_buffer: &mut String,
@@ -199,250 +201,71 @@ pub fn get_job_real_size(job_id: i64) -> Option<u64> {
     }
 }
 
-fn load_active_operations_unlocked() -> Vec<ActiveOperation> {
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(path) {
+fn migrate_old_json_data() {
+    let json_path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    if json_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&json_path) {
             if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
-                return ops;
+                for op in ops {
+                    let _ = db::save_active_operation(&op);
+                }
             }
         }
+        let _ = std::fs::remove_file(json_path);
     }
-    Vec::new()
 }
 
 pub fn save_active_operation(op: &ActiveOperation) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    ops.push(op.clone());
-    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-        let _ = std::fs::write(path, serialized);
-    }
+    let _ = db::save_active_operation(op);
 }
 
 pub fn complete_item_in_active_operation(id: &str, item_name: &str) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            if let Some(ref mut tasks) = op.tasks {
-                if let Some(task) = tasks.iter_mut().find(|t| t.name == item_name) {
-                    task.status = TaskStatus::Completed;
-                    modified = true;
-                }
-            }
-            if let Some(pos) = op.items.iter().position(|x| x == item_name) {
-                op.items.remove(pos);
-                if op.completed_items.is_none() {
-                    op.completed_items = Some(Vec::new());
-                }
-                op.completed_items.as_mut().unwrap().push(item_name.to_string());
-                modified = true;
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::complete_item_in_active_operation(id, item_name);
 }
 
 pub fn complete_items_in_active_operation(id: &str, item_names: &[String]) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            for item_name in item_names {
-                if let Some(ref mut tasks) = op.tasks {
-                    if let Some(task) = tasks.iter_mut().find(|t| &t.name == item_name) {
-                        task.status = TaskStatus::Completed;
-                        modified = true;
-                    }
-                }
-                if let Some(pos) = op.items.iter().position(|x| x == item_name) {
-                    op.items.remove(pos);
-                    if op.completed_items.is_none() {
-                        op.completed_items = Some(Vec::new());
-                    }
-                    op.completed_items.as_mut().unwrap().push(item_name.clone());
-                    modified = true;
-                }
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::complete_items_in_active_operation(id, item_names);
 }
 
 #[allow(dead_code)]
 pub fn update_task_status_in_active_operation(id: &str, item_name: &str, status: TaskStatus, error: Option<String>) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            if let Some(ref mut tasks) = op.tasks {
-                if let Some(task) = tasks.iter_mut().find(|t| t.name == item_name) {
-                    task.status = status.clone();
-                    task.error = error.clone();
-                    modified = true;
-                }
-            }
-            if status == TaskStatus::Completed {
-                if let Some(pos) = op.items.iter().position(|x| x == item_name) {
-                    op.items.remove(pos);
-                    if op.completed_items.is_none() {
-                        op.completed_items = Some(Vec::new());
-                    }
-                    op.completed_items.as_mut().unwrap().push(item_name.to_string());
-                    modified = true;
-                }
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::update_task_status_in_active_operation(id, item_name, status, error);
 }
 
 pub fn update_tasks_status_in_active_operation(id: &str, item_names: &[String], status: TaskStatus, error: Option<String>) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            for item_name in item_names {
-                if let Some(ref mut tasks) = op.tasks {
-                    if let Some(task) = tasks.iter_mut().find(|t| &t.name == item_name) {
-                        task.status = status.clone();
-                        task.error = error.clone();
-                        modified = true;
-                    }
-                }
-                if status == TaskStatus::Completed {
-                    if let Some(pos) = op.items.iter().position(|x| x == item_name) {
-                        op.items.remove(pos);
-                        if op.completed_items.is_none() {
-                            op.completed_items = Some(Vec::new());
-                        }
-                        op.completed_items.as_mut().unwrap().push(item_name.clone());
-                        modified = true;
-                    }
-                }
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::update_tasks_status_in_active_operation(id, item_names, status, error);
 }
 
-// Thêm hàm đẩy danh sách các file quét được từ Checker ngầm
 pub fn append_tasks_to_active_operation(id: &str, new_tasks: &[FileTask]) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            if op.tasks.is_none() {
-                op.tasks = Some(Vec::new());
-            }
-            let tasks = op.tasks.as_mut().unwrap();
-            for new_t in new_tasks {
-                if !tasks.iter().any(|t| t.name == new_t.name) {
-                    tasks.push(new_t.clone());
-                    if new_t.status == TaskStatus::Completed || new_t.status == TaskStatus::Skipped {
-                        if op.completed_items.is_none() {
-                            op.completed_items = Some(Vec::new());
-                        }
-                        let completed = op.completed_items.as_mut().unwrap();
-                        if !completed.contains(&new_t.name) {
-                            completed.push(new_t.name.clone());
-                        }
-                    } else {
-                        if !op.items.contains(&new_t.name) {
-                            op.items.push(new_t.name.clone());
-                        }
-                    }
-                    modified = true;
-                }
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::append_tasks_to_active_operation(id, new_tasks);
 }
 
 pub fn prepare_active_operation_for_resume(id: &str) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            if let Some(ref mut tasks) = op.tasks {
-                for task in tasks {
-                    if task.status == TaskStatus::Transferring || task.status == TaskStatus::Failed {
-                        task.status = TaskStatus::Pending;
-                        task.error = None;
-                        modified = true;
-                    }
-                }
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _ = db::prepare_active_operation_for_resume(id);
 }
 
 pub fn remove_active_operation(id: &str) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations_unlocked();
-    ops.retain(|o| o.id != id);
-    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-        let _ = std::fs::write(path, serialized);
-    }
+    let _ = db::remove_active_operation(id);
 }
 
 pub fn load_active_operations() -> Vec<ActiveOperation> {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    load_active_operations_unlocked()
+    db::load_active_operations().unwrap_or_default()
 }
 
 pub fn clear_active_operations() {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
-    let _ = std::fs::remove_file(path);
+    let _ = db::clear_active_operations();
 }
+
 
 fn load_pre_operations_unlocked() -> Vec<PreOperation> {
     let path = crate::app_config::AppConfig::config_dir().join("pre_ops.json");
@@ -535,6 +358,8 @@ pub enum AppEvent {
         active: Vec<ui::monitor::TransferJob>,
         active_transfers: usize,
         active_checks: usize,
+        transfers_limit: usize,
+        checkers_limit: usize,
         bottleneck_reason: String,
     },
     OAuthFinished {
@@ -726,6 +551,10 @@ impl App {
     }
 
     pub fn new() -> Self {
+        // Khởi tạo database SQLite và thực hiện migration
+        let _ = db::init_db();
+        migrate_old_json_data();
+
         // Khởi tạo và nạp ngôn ngữ
         crate::lang::init_languages();
         let config = AppConfig::load();
@@ -1361,6 +1190,8 @@ impl App {
                         active,
                         active_transfers,
                         active_checks,
+                        transfers_limit,
+                        checkers_limit,
                         bottleneck_reason,
                     } => {
                         self.monitor_state.speed = speed;
@@ -1371,6 +1202,8 @@ impl App {
                         self.monitor_state.active_jobs = active;
                         self.monitor_state.active_transfers = active_transfers;
                         self.monitor_state.active_checks = active_checks;
+                        self.monitor_state.transfers_limit = transfers_limit;
+                        self.monitor_state.checkers_limit = checkers_limit;
                         self.monitor_state.bottleneck_reason = bottleneck_reason;
 
                         // Dựng lại cây thư mục node hiển thị phẳng
@@ -2881,6 +2714,7 @@ mod tests {
 
     #[test]
     fn test_active_operation_resume_and_manipulation() {
+        let _ = db::init_db();
         let op_id = "test_op_123456";
         
         // Ensure it is clean first

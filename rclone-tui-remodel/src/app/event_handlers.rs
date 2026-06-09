@@ -488,10 +488,11 @@ impl App {
                 }
 
                 // Cập nhật bộ điều tiết luồng động (Adaptive Thread Controller)
+                let config_thread = crate::app_config::AppConfig::load();
                 if is_throttled {
                     // Giảm nhẹ hệ số nhân đi -0.5 khi gặp nghẽn API
                     if let Ok(mut state) = crate::app::operations::DYNAMIC_THREAD_STATE.write() {
-                        state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(0.5);
+                        state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(config_thread.min_multiplier);
                         state.last_bottleneck_time = Some(std::time::Instant::now());
                         state.consecutive_success_ticks = 0;
                         crate::app_config::log_info(&format!(
@@ -506,7 +507,7 @@ impl App {
                         if time_since_bottleneck >= 12 {
                             state.consecutive_success_ticks += 1;
                             if state.consecutive_success_ticks >= 8 {
-                                state.current_transfers_multiplier = (state.current_transfers_multiplier + 0.25).min(4.0);
+                                state.current_transfers_multiplier = (state.current_transfers_multiplier + 0.25).min(config_thread.max_multiplier);
                                 state.consecutive_success_ticks = 0;
                                 crate::app_config::log_info(&format!(
                                     "[Dynamic Thread Control] Hệ thống ổn định. Tăng hệ số nhân lên {} để thử nghiệm giới hạn API",
@@ -533,6 +534,28 @@ impl App {
                     }
                 }
 
+                let config = crate::app_config::AppConfig::load();
+                let multiplier = if let Ok(dt_state) = crate::app::operations::DYNAMIC_THREAD_STATE.read() {
+                    dt_state.current_transfers_multiplier
+                } else {
+                    1.0
+                };
+                
+                // Calculate transfers limit
+                let transfers_limit = if let Some(t_fixed) = config.transfers_prior_fixed {
+                    ((t_fixed as f64 * multiplier).round() as usize).clamp(1, config.max_transfers as usize)
+                } else {
+                    ((config.min_transfers as f64 * multiplier).round() as usize).clamp(config.min_transfers as usize, config.max_transfers as usize)
+                };
+
+                // Calculate checkers limit
+                let checkers_limit = if let Some(c_fixed) = config.checkers_prior_fixed {
+                    ((c_fixed as f64 * multiplier).round() as usize).clamp(1, config.max_checkers as usize)
+                } else {
+                    let base_c = config.min_checkers * 2;
+                    ((base_c as f64 * multiplier).round() as usize).clamp(config.min_checkers as usize, config.max_checkers as usize)
+                };
+
                 let _ = tx_clone.send(AppEvent::JobStatsUpdate {
                     speed,
                     upload_speed,
@@ -542,6 +565,8 @@ impl App {
                     active,
                     active_transfers,
                     active_checks,
+                    transfers_limit,
+                    checkers_limit,
                     bottleneck_reason,
                 });
             });

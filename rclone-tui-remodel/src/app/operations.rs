@@ -2947,7 +2947,8 @@ pub async fn check_and_apply_rate_limiting(res: &crate::rclone::SafeRpcResult) -
 
     if is_throttled {
         if let Ok(mut state) = DYNAMIC_THREAD_STATE.write() {
-            state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(0.5);
+            let config = crate::app_config::AppConfig::load();
+            state.current_transfers_multiplier = (state.current_transfers_multiplier - 0.5).max(config.min_multiplier);
             state.last_bottleneck_time = Some(std::time::Instant::now());
             state.consecutive_success_ticks = 0;
             crate::app_config::log_info(&format!(

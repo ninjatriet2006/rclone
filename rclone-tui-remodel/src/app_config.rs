@@ -120,6 +120,14 @@ fn default_checkers_prior_fixed() -> Option<u64> {
     None
 }
 
+fn default_min_multiplier() -> f64 {
+    0.5
+}
+
+fn default_max_multiplier() -> f64 {
+    4.0
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub active_profile: String,
@@ -160,6 +168,10 @@ pub struct AppConfig {
     pub transfers_prior_fixed: Option<u64>,
     #[serde(default = "default_checkers_prior_fixed", alias = "checkers_override")]
     pub checkers_prior_fixed: Option<u64>,
+    #[serde(default = "default_min_multiplier")]
+    pub min_multiplier: f64,
+    #[serde(default = "default_max_multiplier")]
+    pub max_multiplier: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +212,8 @@ impl Default for AppConfig {
             max_checkers: default_max_checkers(),
             transfers_prior_fixed: default_transfers_prior_fixed(),
             checkers_prior_fixed: default_checkers_prior_fixed(),
+            min_multiplier: default_min_multiplier(),
+            max_multiplier: default_max_multiplier(),
         }
     }
 }
@@ -316,6 +330,10 @@ impl AppConfig {
                 commented_yaml.push_str("\n# Ưu tiên số tệp truyền tải đồng thời cố định (Ví dụ: 8). Đặt null để tự động tối ưu hóa.\n");
             } else if line.starts_with("checkers_prior_fixed:") {
                 commented_yaml.push_str("\n# Ưu tiên số tệp kiểm tra đồng thời cố định (Ví dụ: 16). Đặt null để tự động tối ưu hóa.\n");
+            } else if line.starts_with("min_multiplier:") {
+                commented_yaml.push_str("\n# Hệ số nhân giới hạn luồng động tối thiểu (mặc định: 0.5)\n");
+            } else if line.starts_with("max_multiplier:") {
+                commented_yaml.push_str("\n# Hệ số nhân giới hạn luồng động tối đa (mặc định: 4.0)\n");
             }
             commented_yaml.push_str(line);
             commented_yaml.push_str("\n");
