@@ -280,6 +280,7 @@ impl App {
 
                                              self.monitor_state.history.push(format!("Đang khởi động lại tác vụ sao chép bất đồng bộ: {}", src_path));
 
+                                             let skip_flag = self.skip_permission_precheck.clone();
                                              tokio::spawn(async move {
                                                  crate::app::operations::start_async_checker_and_transfer(
                                                      op_id,
@@ -288,6 +289,8 @@ impl App {
                                                      is_dir,
                                                      use_checksum,
                                                      is_copy,
+                                                     None,
+                                                     skip_flag,
                                                      tx_op,
                                                  ).await;
                                              });

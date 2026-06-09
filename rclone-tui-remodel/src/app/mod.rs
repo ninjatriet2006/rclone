@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -100,6 +100,7 @@ lazy_static::lazy_static! {
     pub(crate) static ref JOB_REAL_SIZES: std::sync::Mutex<std::collections::HashMap<i64, u64>> = std::sync::Mutex::new(std::collections::HashMap::new());
     pub(crate) static ref JOB_DIRECTIONS: std::sync::Mutex<std::collections::HashMap<i64, JobDirection>> = std::sync::Mutex::new(std::collections::HashMap::new());
     pub(crate) static ref ACTIVE_OPS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static ref PRE_OPS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -139,6 +140,21 @@ pub struct ActiveOperation {
     pub is_copy: bool,
     pub completed_items: Option<Vec<String>>,
     pub tasks: Option<Vec<FileTask>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreOperation {
+    pub id: String,
+    pub action_type: String, // "copy" or "move"
+    pub src: String,
+    pub dest: String,
+    pub is_dir: bool,
+    pub use_checksum: bool,
+    pub items: Option<Vec<crate::ui::explorer::ClipboardItem>>,
+    pub scanned_count: usize,
+    pub total_files: usize,
+    pub restricted_count: usize,
+    pub status: String, // "scanning", "done", "failed", "bypassed"
 }
 
 pub fn register_job_direction(job_id: i64, direction: JobDirection) {
@@ -355,6 +371,19 @@ pub fn append_tasks_to_active_operation(id: &str, new_tasks: &[FileTask]) {
             for new_t in new_tasks {
                 if !tasks.iter().any(|t| t.name == new_t.name) {
                     tasks.push(new_t.clone());
+                    if new_t.status == TaskStatus::Completed || new_t.status == TaskStatus::Skipped {
+                        if op.completed_items.is_none() {
+                            op.completed_items = Some(Vec::new());
+                        }
+                        let completed = op.completed_items.as_mut().unwrap();
+                        if !completed.contains(&new_t.name) {
+                            completed.push(new_t.name.clone());
+                        }
+                    } else {
+                        if !op.items.contains(&new_t.name) {
+                            op.items.push(new_t.name.clone());
+                        }
+                    }
                     modified = true;
                 }
             }
@@ -412,6 +441,53 @@ pub fn load_active_operations() -> Vec<ActiveOperation> {
 pub fn clear_active_operations() {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let path = crate::app_config::AppConfig::config_dir().join("active_ops.json");
+    let _ = std::fs::remove_file(path);
+}
+
+fn load_pre_operations_unlocked() -> Vec<PreOperation> {
+    let path = crate::app_config::AppConfig::config_dir().join("pre_ops.json");
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(ops) = serde_json::from_str::<Vec<PreOperation>>(&content) {
+                return ops;
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub fn load_pre_operations() -> Vec<PreOperation> {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    load_pre_operations_unlocked()
+}
+
+pub fn save_pre_operation(op: &PreOperation) {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("pre_ops.json");
+    let mut ops = load_pre_operations_unlocked();
+    if let Some(pos) = ops.iter().position(|o| o.id == op.id) {
+        ops[pos] = op.clone();
+    } else {
+        ops.push(op.clone());
+    }
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn remove_pre_operation(id: &str) {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("pre_ops.json");
+    let mut ops = load_pre_operations_unlocked();
+    ops.retain(|o| o.id != id);
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn clear_pre_operations() {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::app_config::AppConfig::config_dir().join("pre_ops.json");
     let _ = std::fs::remove_file(path);
 }
 
@@ -522,6 +598,7 @@ pub enum AppEvent {
         total_files: u64,
         total_size: u64,
     },
+    #[allow(dead_code)]
     MultiPermissionErrorDetected {
         items: Vec<ui::explorer::ClipboardItem>,
         dest_remote: String,
@@ -529,6 +606,7 @@ pub enum AppEvent {
         restricted_files: Vec<String>,
         use_checksum: bool,
     },
+    #[allow(dead_code)]
     MultiPermissionCheckPassed {
         items: Vec<ui::explorer::ClipboardItem>,
         dest_remote: String,
@@ -572,6 +650,7 @@ pub(crate) struct ScanState {
     pub(crate) total_size: u64,
 }
 
+#[allow(dead_code)]
 pub(crate) struct MultiScanState {
     pub(crate) queue: Vec<(String, String)>,
     pub(crate) active_tasks: usize,
@@ -689,12 +768,34 @@ impl App {
             monitor_state.failed_files.push(ui::monitor::FailedCopyItem {
                 src: op.src.clone(),
                 dest: op.dest.clone(),
-                error: "Tác vụ bị gián đoạn do crash / tắt đột ngột (Nhấn R để thử lại)".to_string(),
+                error: "Tác vụ bị gián đoạn do crash / tắt đột ngột (Nhấn Alt+R để thử lại)".to_string(),
                 time: now_str,
                 is_copy: op.is_copy,
             });
         }
         clear_active_operations();
+
+        let saved_pre_ops = load_pre_operations();
+        for op in saved_pre_ops {
+            let now_str = {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            };
+            monitor_state.failed_files.push(ui::monitor::FailedCopyItem {
+                src: op.src.clone(),
+                dest: op.dest.clone(),
+                error: "Tác vụ bị gián đoạn khi đang quét quyền/checkhash do crash / tắt đột ngột (Nhấn Alt+R để thử lại)".to_string(),
+                time: now_str,
+                is_copy: op.action_type == "copy",
+            });
+        }
+        clear_pre_operations();
 
         App {
             screen: Screen::MainMenu,
@@ -1445,7 +1546,7 @@ impl App {
                         }
                     }
                     AppEvent::PermissionErrorDetected { src, dest, is_dir, restricted_files, use_checksum, .. } => {
-                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                        if matches!(self.explorer_state.popup, ui::explorer::ExplorerPopup::PermissionScanning { .. } | ui::explorer::ExplorerPopup::None) {
                             let mut options = Vec::new();
                             let mut actions = Vec::new();
 
@@ -1487,7 +1588,7 @@ impl App {
                         }
                     }
                     AppEvent::PermissionCheckPassed { src, dest, is_dir, use_checksum, total_files: _, total_size } => {
-                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                        if matches!(self.explorer_state.popup, ui::explorer::ExplorerPopup::PermissionScanning { .. } | ui::explorer::ExplorerPopup::None) {
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
                                 src: src.clone(),
                                 dest: dest.clone(),
@@ -1536,7 +1637,7 @@ impl App {
                     }
                     AppEvent::MultiPermissionErrorDetected { items, dest_remote, dest_path, restricted_files, use_checksum } => {
                         let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
-                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                        if matches!(self.explorer_state.popup, ui::explorer::ExplorerPopup::PermissionScanning { .. } | ui::explorer::ExplorerPopup::None) {
                             let mut options = Vec::new();
                             let mut actions = Vec::new();
 
@@ -1581,12 +1682,9 @@ impl App {
                     AppEvent::MultiPermissionCheckPassed { items, dest_remote, dest_path, use_checksum } => {
                         let dest_full = if dest_remote.is_empty() { dest_path.clone() } else { format!("{}:{}", dest_remote, dest_path) };
                         let src_full = format!("({} mục)", items.len());
-                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
-                            let dest_remote_clone = dest_remote.clone();
-                            let dest_path_clone = dest_path.clone();
+                        if matches!(self.explorer_state.popup, ui::explorer::ExplorerPopup::PermissionScanning { .. } | ui::explorer::ExplorerPopup::None) {
                             let items_clone = items.clone();
                             let tx_op = tx.clone();
-                            let pane_type = self.explorer_state.active_pane.clone();
 
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::CopyProgress {
                                 src: format!("({} mục)", items_clone.len()),
@@ -1615,92 +1713,25 @@ impl App {
                                 use_checksum,
                                 is_copy: true,
                                 completed_items: Some(Vec::new()),
-                                tasks: None,
+                                tasks: Some(Vec::new()),
                             };
                             save_active_operation(&op);
 
+                            let src_path = op.src.clone();
+                            let skip_flag = self.skip_permission_precheck.clone();
+
                             tokio::spawn(async move {
-                                let mut last_err = None;
-                                for item in items_clone {
-                                    let item_src = if item.remote.is_empty() {
-                                        PathBuf::from(&item.path)
-                                            .join(&item.name)
-                                            .to_string_lossy()
-                                            .to_string()
-                                    } else {
-                                        let clean_remote = item.remote.trim_end_matches(':');
-                                        let clean_path = if item.path.starts_with('/') {
-                                            item.path.clone()
-                                        } else {
-                                            format!("/{}", item.path)
-                                        };
-                                        if clean_path.ends_with('/') {
-                                            format!("{}:{}{}", clean_remote, clean_path, item.name)
-                                        } else {
-                                            format!("{}:{}/{}", clean_remote, clean_path, item.name)
-                                        }
-                                    };
-
-                                    let item_dest = if dest_remote_clone.is_empty() {
-                                        PathBuf::from(&dest_path_clone)
-                                            .join(&item.name)
-                                            .to_string_lossy()
-                                            .to_string()
-                                    } else {
-                                        let clean_remote = dest_remote_clone.trim_end_matches(':');
-                                        let clean_path = if dest_path_clone.starts_with('/') {
-                                            dest_path_clone.clone()
-                                        } else {
-                                            format!("/{}", dest_path_clone)
-                                        };
-                                        if clean_path.ends_with('/') {
-                                            format!("{}:{}{}", clean_remote, clean_path, item.name)
-                                        } else {
-                                            format!("{}:{}/{}", clean_remote, clean_path, item.name)
-                                        }
-                                    };
-
-                                    let method = "sync/copy".to_string();
-                                    let mut param = json!({
-                                        "srcFs": item_src,
-                                        "dstFs": item_dest,
-                                    });
-                                    if use_checksum {
-                                        if let Some(obj) = param.as_object_mut() {
-                                            obj.insert("_config".to_string(), json!({ "checksum": true }));
-                                        }
-                                    }
-
-                                    let res = run_rpc_job_async_with_progress(
-                                        method,
-                                        param,
-                                        Some((item_src.clone(), item_dest.clone(), true)),
-                                        Some(tx_op.clone()),
-                                        None,
-                                    ).await;
-
-                                    match res {
-                                        Ok(_) => {
-                                            complete_item_in_active_operation(&op_id, &item.name);
-                                        }
-                                        Err(e) => {
-                                            last_err = Some(e);
-                                        }
-                                    }
-                                }
-
-                                remove_active_operation(&op_id);
-
-                                let final_result = match last_err {
-                                    None => Ok(()),
-                                    Some(e) => Err(e),
-                                };
-
-                                let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
-                                    pane: pane_type,
-                                    op_name: "sao chép nhiều mục".to_string(),
-                                    result: final_result,
-                                });
+                                crate::app::operations::start_async_checker_and_transfer(
+                                    op_id,
+                                    src_path,
+                                    dest_full,
+                                    true,
+                                    use_checksum,
+                                    true,
+                                    Some(items_clone),
+                                    skip_flag,
+                                    tx_op,
+                                ).await;
                             });
                         } else {
                             if let Some(job) = self.monitor_state.pending_jobs.iter_mut().find(|j| j.src == src_full && j.dest == dest_full) {
@@ -1709,7 +1740,7 @@ impl App {
                         }
                     }
                     AppEvent::PermissionScanProgress { src, dest, is_dir, scanned_count, total_files, restricted_count } => {
-                        if let ui::explorer::ExplorerPopup::PermissionScanning { .. } = self.explorer_state.popup {
+                        if let ui::explorer::ExplorerPopup::PermissionScanning { items, use_checksum, .. } = &self.explorer_state.popup {
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::PermissionScanning {
                                 src,
                                 dest,
@@ -1717,6 +1748,8 @@ impl App {
                                 scanned_count,
                                 total_files,
                                 restricted_count,
+                                items: items.clone(),
+                                use_checksum: *use_checksum,
                             };
                         }
                     }
@@ -2959,6 +2992,64 @@ mod tests {
         remove_active_operation(op_id);
         let ops = load_active_operations();
         assert!(!ops.iter().any(|o| o.id == op_id));
+    }
+
+    #[test]
+    fn test_pre_operation_saving_and_manipulation() {
+        let op_id = "test_pre_op_123456";
+
+        // Ensure clean
+        remove_pre_operation(op_id);
+
+        let pre_op = PreOperation {
+            id: op_id.to_string(),
+            action_type: "copy".to_string(),
+            src: "/tmp/src".to_string(),
+            dest: "/tmp/dst".to_string(),
+            is_dir: true,
+            use_checksum: true,
+            items: Some(vec![
+                crate::ui::explorer::ClipboardItem {
+                    remote: "drive".to_string(),
+                    path: "/test".to_string(),
+                    name: "item1".to_string(),
+                    is_dir: false,
+                }
+            ]),
+            scanned_count: 5,
+            total_files: 10,
+            restricted_count: 1,
+            status: "scanning".to_string(),
+        };
+
+        // 1. Save
+        save_pre_operation(&pre_op);
+
+        // 2. Load and verify
+        let pre_ops = load_pre_operations();
+        let loaded = pre_ops.iter().find(|o| o.id == op_id).expect("Should find test pre-op");
+        assert_eq!(loaded.scanned_count, 5);
+        assert_eq!(loaded.total_files, 10);
+        assert_eq!(loaded.restricted_count, 1);
+        assert_eq!(loaded.status, "scanning");
+        assert_eq!(loaded.items.as_ref().unwrap().len(), 1);
+        assert_eq!(loaded.items.as_ref().unwrap()[0].name, "item1");
+
+        // 3. Update status and save again
+        let mut updated = loaded.clone();
+        updated.status = "done".to_string();
+        updated.scanned_count = 10;
+        save_pre_operation(&updated);
+
+        let pre_ops2 = load_pre_operations();
+        let loaded2 = pre_ops2.iter().find(|o| o.id == op_id).unwrap();
+        assert_eq!(loaded2.status, "done");
+        assert_eq!(loaded2.scanned_count, 10);
+
+        // 4. Remove
+        remove_pre_operation(op_id);
+        let pre_ops3 = load_pre_operations();
+        assert!(!pre_ops3.iter().any(|o| o.id == op_id));
     }
 }
 

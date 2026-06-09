@@ -205,6 +205,8 @@ pub enum ExplorerPopup {
         scanned_count: usize,
         total_files: usize,
         restricted_count: usize,
+        items: Option<Vec<ClipboardItem>>,
+        use_checksum: bool,
     },
     DedupeModeSelect {
         by_hash: bool,
@@ -287,7 +289,7 @@ impl TreeNode {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClipboardItem {
     pub remote: String,
     pub path: String,
@@ -544,7 +546,7 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
         ExplorerPopup::SelectBaseRemote { remotes, selected_idx, .. } => {
             draw_select_base_remote_popup(frame, remotes, *selected_idx);
         }
-        ExplorerPopup::PermissionScanning { src, dest, is_dir: _, scanned_count, total_files, restricted_count } => {
+        ExplorerPopup::PermissionScanning { src, dest, is_dir: _, scanned_count, total_files, restricted_count, .. } => {
             draw_permission_scanning_popup(frame, src, dest, *scanned_count, *total_files, *restricted_count);
         }
         ExplorerPopup::DedupeModeSelect { by_hash, selected_idx } => {
@@ -1598,10 +1600,13 @@ fn draw_permission_scanning_popup(
             Span::styled(format!("{} tệp tin", restricted_count), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
-        Line::from(Span::styled(
-            " Nhấn [Esc] để bỏ qua và chuyển tác vụ vào hàng chờ của Job Monitor ",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-        )),
+        Line::from(vec![
+            Span::styled(" Nhấn ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            Span::styled("[Esc]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" để ẩn (chạy ngầm) | ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            Span::styled("[Ctrl+C]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" để bỏ qua và đưa vào hàng chờ ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+        ]),
     ];
 
     let paragraph = Paragraph::new(lines).block(block);

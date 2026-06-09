@@ -829,8 +829,9 @@ impl App {
                 };
 
                 let tx_check = tx.clone();
+                let skip_flag = self.skip_permission_precheck.clone();
                 tokio::spawn(async move {
-                    start_async_checker_and_transfer(op_id, src, dest, is_dir, use_checksum, true, tx_check).await;
+                    start_async_checker_and_transfer(op_id, src, dest, is_dir, use_checksum, true, None, skip_flag, tx_check).await;
                 });
             } else {
                 let mut options = Vec::new();
@@ -1356,10 +1357,7 @@ impl App {
                     job_id: None,
                 };
                 let tx_op = tx.clone();
-                let dest_remote_clone = dest_remote.clone();
-                let dest_path_clone = dest_path.clone();
                 let items_clone = items.clone();
-                let pane_type = self.explorer_state.active_pane.clone();
                 let op_id = format!("multi_copy_as_much_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
                 let op = crate::app::ActiveOperation {
                     id: op_id.clone(),
@@ -1380,101 +1378,25 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
-                    tasks: None,
+                    tasks: Some(Vec::new()),
                 };
                 crate::app::save_active_operation(&op);
 
+                let src_path = op.src.clone();
+                let skip_flag = self.skip_permission_precheck.clone();
+
                 tokio::spawn(async move {
-                    let total = items_clone.len();
-                    let mut last_err = None;
-                    for (idx, clip_item) in items_clone.iter().enumerate() {
-                        let src = if clip_item.remote.is_empty() {
-                            PathBuf::from(&clip_item.path)
-                                .join(&clip_item.name)
-                                .to_string_lossy()
-                                .to_string()
-                        } else {
-                            let clean_remote = clip_item.remote.trim_end_matches(':');
-                            let clean_path = if clip_item.path.starts_with('/') {
-                                clip_item.path.clone()
-                            } else {
-                                format!("/{}", clip_item.path)
-                            };
-                            let clean_path = if clean_path.ends_with('/') {
-                                format!("{}{}", clean_path, clip_item.name)
-                            } else {
-                                format!("{}/{}", clean_path, clip_item.name)
-                            };
-                            format!("{}:{}", clean_remote, clean_path)
-                        };
-                        let dest = if dest_remote_clone.is_empty() {
-                            PathBuf::from(&dest_path_clone)
-                                .join(&clip_item.name)
-                                .to_string_lossy()
-                                .to_string()
-                        } else {
-                            format!("{}:{}/{}", dest_remote_clone.trim_end_matches(':'), dest_path_clone.trim_start_matches('/'), clip_item.name)
-                        };
-
-                        let pct = ((idx as f64) / total as f64) * 100.0;
-                        let _ = tx_op.send(AppEvent::CopyProgress {
-                            src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
-                            dest: dest.clone(),
-                            pct,
-                            job_id: None,
-                        });
-
-                        let method = if clip_item.is_dir {
-                            "sync/copy"
-                        } else {
-                            "operations/copyfile"
-                        };
-                        let mut param = if clip_item.is_dir {
-                            json!({ "srcFs": src, "dstFs": dest })
-                        } else {
-                            json!({ "srcFs": src.rsplit_once('/').map(|(p,_)| p).unwrap_or(&src), "srcRemote": clip_item.name, "dstFs": dest.rsplit_once('/').map(|(p,_)| p).unwrap_or(&dest), "dstRemote": clip_item.name })
-                        };
-
-                        if use_checksum {
-                            if let Some(obj) = param.as_object_mut() {
-                                obj.insert("_config".to_string(), json!({ "checksum": true }));
-                            }
-                        }
-
-                        if clip_item.is_dir {
-                            let _ = create_all_source_directories(&src, &dest).await;
-                        }
-
-                        let res = run_rpc_job_async(method.to_string(), param).await;
-                        crate::app::complete_item_in_active_operation(&op_id, &clip_item.name);
-                        if let Err(e) = res {
-                            let err_lower = e.to_lowercase();
-                            if err_lower.contains("restrictedlink")
-                                || err_lower.contains("download")
-                                || err_lower.contains("forbidden")
-                                || err_lower.contains("only the owner")
-                            {
-                                // Bỏ qua lỗi do file bị hạn chế download
-                            } else {
-                                last_err = Some(e);
-                            }
-                        }
-                    }
-                    let _ = tx_op.send(AppEvent::CopyProgress {
-                        src: format!("({} mục)", total),
-                        dest: String::new(),
-                        pct: 100.0,
-                        job_id: None,
-                    });
-                    let result = match last_err {
-                        None => Ok(()),
-                        Some(e) => Err(e),
-                    };
-                    let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
-                        pane: pane_type,
-                        op_name: "sao chép nhiều mục".to_string(),
-                        result,
-                    });
+                    start_async_checker_and_transfer(
+                        op_id,
+                        src_path,
+                        dest_full,
+                        true,
+                        use_checksum,
+                        true,
+                        Some(items_clone),
+                        skip_flag,
+                        tx_op,
+                    ).await;
                 });
             }
             ui::explorer::FallbackAction::MultiPermissionRestrictedCopy { items, dest_remote, dest_path, restricted_files: _, use_checksum } => {
@@ -1486,10 +1408,7 @@ impl App {
                     job_id: None,
                 };
                 let tx_op = tx.clone();
-                let dest_remote_clone = dest_remote.clone();
-                let dest_path_clone = dest_path.clone();
                 let items_clone = items.clone();
-                let pane_type = self.explorer_state.active_pane.clone();
                 let op_id = format!("multi_restr_copy_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
                 let op = crate::app::ActiveOperation {
                     id: op_id.clone(),
@@ -1510,71 +1429,25 @@ impl App {
                     use_checksum,
                     is_copy: true,
                     completed_items: Some(Vec::new()),
-                    tasks: None,
+                    tasks: Some(Vec::new()),
                 };
                 crate::app::save_active_operation(&op);
 
+                let src_path = op.src.clone();
+                let skip_flag = self.skip_permission_precheck.clone();
+
                 tokio::spawn(async move {
-                    let total = items_clone.len();
-                    let mut last_err = None;
-                    for (idx, clip_item) in items_clone.iter().enumerate() {
-                        let src = if clip_item.remote.is_empty() {
-                            PathBuf::from(&clip_item.path)
-                                .join(&clip_item.name)
-                                .to_string_lossy()
-                                .to_string()
-                        } else {
-                            let clean_remote = clip_item.remote.trim_end_matches(':');
-                            let clean_path = if clip_item.path.starts_with('/') {
-                                clip_item.path.clone()
-                            } else {
-                                format!("/{}", clip_item.path)
-                            };
-                            let clean_path = if clean_path.ends_with('/') {
-                                format!("{}{}", clean_path, clip_item.name)
-                            } else {
-                                format!("{}/{}", clean_path, clip_item.name)
-                            };
-                            format!("{}:{}", clean_remote, clean_path)
-                        };
-                        let dest = if dest_remote_clone.is_empty() {
-                            PathBuf::from(&dest_path_clone)
-                                .join(&clip_item.name)
-                                .to_string_lossy()
-                                .to_string()
-                        } else {
-                            format!("{}:{}/{}", dest_remote_clone.trim_end_matches(':'), dest_path_clone.trim_start_matches('/'), clip_item.name)
-                        };
-
-                        let pct = ((idx as f64) / total as f64) * 100.0;
-                        let _ = tx_op.send(AppEvent::CopyProgress {
-                            src: format!("({}/{}) {}", idx + 1, total, clip_item.name),
-                            dest: dest.clone(),
-                            pct,
-                            job_id: None,
-                        });
-
-                        let res = execute_restricted_copy(src, dest, clip_item.is_dir, use_checksum, tx_op.clone()).await;
-                        crate::app::complete_item_in_active_operation(&op_id, &clip_item.name);
-                        if let Err(e) = res {
-                            last_err = Some(e);
-                        }
-                    }
-                    let _ = tx_op.send(AppEvent::CopyProgress {
-                        src: format!("({} mục)", total),
-                        dest: String::new(),
-                        pct: 100.0,
-                        job_id: None,
-                    });
-                    let result = match last_err {
-                        None => Ok(()),
-                        Some(e) => Err(e),
-                    };
-                    let _ = tx_op.send(AppEvent::ExplorerOperationFinished {
-                        pane: pane_type,
-                        op_name: "sao chép hạn chế nhiều mục".to_string(),
-                        result,
-                    });
+                    start_async_checker_and_transfer(
+                        op_id,
+                        src_path,
+                        dest_full,
+                        true,
+                        use_checksum,
+                        true,
+                        Some(items_clone),
+                        skip_flag,
+                        tx_op,
+                    ).await;
                 });
             }
             ui::explorer::FallbackAction::Cancel => {}
@@ -3065,8 +2938,10 @@ pub async fn start_async_checker_and_transfer(
     src: String,
     dest: String,
     is_dir: bool,
-    _use_checksum: bool,
+    use_checksum: bool,
     is_copy: bool,
+    items: Option<Vec<crate::ui::explorer::ClipboardItem>>,
+    skip_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
 ) {
     let op_id_clone = op_id.clone();
@@ -3078,10 +2953,29 @@ pub async fn start_async_checker_and_transfer(
     let checker_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let checker_running_clone = checker_running.clone();
 
+    let items_to_save = items.clone();
+
     // 1. Spawning Checker Task
     tokio::spawn(async move {
+        // Initialize PreOperation in pre_ops.json
+        let pre_op = crate::app::PreOperation {
+            id: op_id_clone.clone(),
+            action_type: if is_copy { "copy".to_string() } else { "move".to_string() },
+            src: src_clone.clone(),
+            dest: dest_clone.clone(),
+            is_dir,
+            use_checksum,
+            items: items_to_save,
+            scanned_count: 0,
+            total_files: 0,
+            restricted_count: 0,
+            status: "scanning".to_string(),
+        };
+        crate::app::save_pre_operation(&pre_op);
+
         let mut dest_files = std::collections::HashMap::new();
-        if is_dir {
+        let list_dest = is_dir || items.is_some();
+        if list_dest {
             let list_param = serde_json::json!({
                 "fs": dest_clone,
                 "remote": "",
@@ -3107,11 +3001,32 @@ pub async fn start_async_checker_and_transfer(
         let mut scanned_count = 0;
         let mut restricted_count = 0;
 
-        if !is_dir {
-            // Single file scan
-            let (src_fs, filename) = parse_parent_and_child(&src_clone);
+        let mut dirs_to_walk = Vec::new();
+        let mut files_to_check = Vec::new();
+
+        if let Some(ref list) = items {
+            for clip_item in list {
+                if clip_item.is_dir {
+                    dirs_to_walk.push(clip_item.name.clone());
+                } else {
+                    files_to_check.push(clip_item.name.clone());
+                }
+            }
+        } else {
+            if is_dir {
+                dirs_to_walk.push("".to_string());
+            } else {
+                let (_, filename) = parse_parent_and_child(&src_clone);
+                files_to_check.push(filename);
+            }
+        }
+
+        let mut batch = Vec::new();
+
+        // Check individual files
+        for filename in files_to_check {
             let list_param = serde_json::json!({
-                "fs": src_fs,
+                "fs": src_clone,
                 "remote": filename,
                 "opt": { "recurse": false, "metadata": true }
             }).to_string();
@@ -3125,14 +3040,16 @@ pub async fn start_async_checker_and_transfer(
                         if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
                             for item in arr {
                                 file_size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
-                                let is_rest = if let Some(meta) = item.get("Metadata") {
-                                    meta.get("copy-requires-writer-permission").and_then(|v| v.as_str()) == Some("true")
-                                } else {
-                                    false
-                                };
-                                let mime = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
-                                if is_rest || mime.contains("shortcut.dangling") {
-                                    is_restricted = true;
+                                if !skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                    let is_rest = if let Some(meta) = item.get("Metadata") {
+                                        meta.get("copy-requires-writer-permission").and_then(|v| v.as_str()) == Some("true")
+                                    } else {
+                                        false
+                                    };
+                                    let mime = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
+                                    if is_rest || mime.contains("shortcut.dangling") {
+                                        is_restricted = true;
+                                    }
                                 }
                             }
                         }
@@ -3158,109 +3075,135 @@ pub async fn start_async_checker_and_transfer(
                 }
             };
 
-            let task = crate::app::FileTask {
-                name: filename,
+            batch.push(crate::app::FileTask {
+                name: filename.clone(),
                 size: file_size,
                 status,
                 error: if is_restricted { Some("Restricted link/dangling file skipped".to_string()) } else { None },
-            };
+            });
+            scanned_count += 1;
 
-            crate::app::append_tasks_to_active_operation(&op_id_clone, &[task]);
-            scanned_count = 1;
+            if batch.len() >= 20 {
+                crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+                batch.clear();
+            }
 
             let _ = tx_clone.send(AppEvent::PermissionScanProgress {
                 src: src_clone.clone(),
                 dest: dest_clone.clone(),
-                is_dir: false,
+                is_dir: list_dest,
                 scanned_count,
-                total_files: 1,
+                total_files: 0,
                 restricted_count,
             });
-        } else {
-            // Directory walk
-            let mut queue = vec!["".to_string()];
-            let mut batch = Vec::new();
 
-            while !queue.is_empty() {
-                let dir = queue.remove(0);
-                let list_param = serde_json::json!({
-                    "fs": src_clone,
-                    "remote": dir,
-                    "opt": { "recurse": false, "metadata": true }
-                }).to_string();
+            let mut pre_ops = crate::app::load_pre_operations();
+            if let Some(pos) = pre_ops.iter().position(|o| o.id == op_id_clone) {
+                pre_ops[pos].scanned_count = scanned_count;
+                pre_ops[pos].restricted_count = restricted_count;
+                if skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    pre_ops[pos].status = "bypassed".to_string();
+                }
+                crate::app::save_pre_operation(&pre_ops[pos]);
+            }
+        }
 
-                if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
-                    if res.status == 200 {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
-                            if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
-                                for item in arr {
-                                    let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
-                                    let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        // Walk directories
+        let mut queue = dirs_to_walk;
+        while !queue.is_empty() {
+            let dir = queue.remove(0);
+            let list_param = serde_json::json!({
+                "fs": src_clone,
+                "remote": dir,
+                "opt": { "recurse": false, "metadata": true }
+            }).to_string();
 
-                                    if is_item_dir {
-                                        queue.push(path);
-                                    } else {
-                                        scanned_count += 1;
-                                        let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+            if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
+                if res.status == 200 {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                        if let Some(arr) = val.get("list").and_then(|l| l.as_array()) {
+                            for item in arr {
+                                let is_item_dir = item.get("IsDir").and_then(|d| d.as_bool()).unwrap_or(false);
+                                let path = item.get("Path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+
+                                if is_item_dir {
+                                    queue.push(path);
+                                } else {
+                                    scanned_count += 1;
+                                    let size = item.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                    let mut is_restricted = false;
+                                    
+                                    if !skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
                                         let is_rest = if let Some(meta) = item.get("Metadata") {
                                             meta.get("copy-requires-writer-permission").and_then(|v| v.as_str()) == Some("true")
                                         } else {
                                             false
                                         };
                                         let mime = item.get("MimeType").and_then(|m| m.as_str()).unwrap_or("");
-                                        let is_restricted = is_rest || mime.contains("shortcut.dangling");
+                                        is_restricted = is_rest || mime.contains("shortcut.dangling");
+                                    }
 
-                                        let status = if is_restricted {
-                                            restricted_count += 1;
-                                            crate::app::TaskStatus::Failed
-                                        } else {
-                                            let mut matches = false;
-                                            if dest_files.contains_key(&path) {
-                                                let (d_size, _) = dest_files.get(&path).unwrap();
-                                                if *d_size == size {
-                                                    matches = true;
-                                                }
+                                    let status = if is_restricted {
+                                        restricted_count += 1;
+                                        crate::app::TaskStatus::Failed
+                                    } else {
+                                        let mut matches = false;
+                                        if dest_files.contains_key(&path) {
+                                            let (d_size, _) = dest_files.get(&path).unwrap();
+                                            if *d_size == size {
+                                                matches = true;
                                             }
-                                            if matches {
-                                                crate::app::TaskStatus::Skipped
-                                            } else {
-                                                crate::app::TaskStatus::Pending
-                                            }
-                                        };
-
-                                        batch.push(crate::app::FileTask {
-                                            name: path,
-                                            size,
-                                            status,
-                                            error: if is_restricted { Some("Restricted/dangling file skipped".to_string()) } else { None },
-                                        });
-
-                                        if batch.len() >= 20 {
-                                            crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
-                                            batch.clear();
                                         }
+                                        if matches {
+                                            crate::app::TaskStatus::Skipped
+                                        } else {
+                                            crate::app::TaskStatus::Pending
+                                        }
+                                    };
+
+                                    batch.push(crate::app::FileTask {
+                                        name: path,
+                                        size,
+                                        status,
+                                        error: if is_restricted { Some("Restricted/dangling file skipped".to_string()) } else { None },
+                                    });
+
+                                    if batch.len() >= 20 {
+                                        crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+                                        batch.clear();
                                     }
                                 }
                             }
                         }
                     }
                 }
-
-                let _ = tx_clone.send(AppEvent::PermissionScanProgress {
-                    src: src_clone.clone(),
-                    dest: dest_clone.clone(),
-                    is_dir: true,
-                    scanned_count,
-                    total_files: 0,
-                    restricted_count,
-                });
             }
 
-            if !batch.is_empty() {
-                crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+            let _ = tx_clone.send(AppEvent::PermissionScanProgress {
+                src: src_clone.clone(),
+                dest: dest_clone.clone(),
+                is_dir: list_dest,
+                scanned_count,
+                total_files: 0,
+                restricted_count,
+            });
+
+            let mut pre_ops = crate::app::load_pre_operations();
+            if let Some(pos) = pre_ops.iter().position(|o| o.id == op_id_clone) {
+                pre_ops[pos].scanned_count = scanned_count;
+                pre_ops[pos].restricted_count = restricted_count;
+                if skip_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    pre_ops[pos].status = "bypassed".to_string();
+                }
+                crate::app::save_pre_operation(&pre_ops[pos]);
             }
         }
 
+        if !batch.is_empty() {
+            crate::app::append_tasks_to_active_operation(&op_id_clone, &batch);
+        }
+
+        crate::app::remove_pre_operation(&op_id_clone);
         checker_running_clone.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 

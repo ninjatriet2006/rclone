@@ -451,7 +451,22 @@ impl MonitorState {
                     let is_running = self.active_jobs.iter().any(|j| {
                         j.files.iter().any(|f| f.path == *item || f.path.starts_with(&format!("{}/", item)))
                     });
-                    let status = if is_running { "running".to_string() } else { "queued".to_string() };
+                    let mut status = if is_running { "running".to_string() } else { "queued".to_string() };
+                    let mut error = String::new();
+                    if let Some(ref tasks) = op.tasks {
+                        if let Some(task) = tasks.iter().find(|t| &t.name == item) {
+                            status = match task.status {
+                                crate::app::TaskStatus::Pending => "queued".to_string(),
+                                crate::app::TaskStatus::Transferring => "running".to_string(),
+                                crate::app::TaskStatus::Completed => "completed".to_string(),
+                                crate::app::TaskStatus::Failed => "failed".to_string(),
+                                crate::app::TaskStatus::Skipped => "skipped".to_string(),
+                            };
+                            if let Some(ref err) = task.error {
+                                error = err.clone();
+                            }
+                        }
+                    }
                     
                     self.visible_nodes.push(VisibleNode {
                         id: format!("op/{}/queued/{}", op.id, item),
@@ -468,7 +483,7 @@ impl MonitorState {
                         percentage: 0,
                         job_id: None,
                         job_name: String::new(),
-                        error: String::new(),
+                        error,
                     });
                 }
             }
