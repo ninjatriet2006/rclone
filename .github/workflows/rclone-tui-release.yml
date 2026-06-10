@@ -19,34 +19,34 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: rclone-tui-linux-amd64
-            binary_name: rclone-tui
-            command_archive: tar -czf ../rclone-tui-linux-amd64.tar.gz rclone-tui
+            artifact_name: tui-rclone-linux-amd64
+            binary_name: tui-rclone
+            command_archive: tar -czf ../tui-rclone-linux-amd64.tar.gz tui-rclone
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact_name: rclone-tui-linux-arm64
-            binary_name: rclone-tui
-            command_archive: tar -czf ../rclone-tui-linux-arm64.tar.gz rclone-tui
+            artifact_name: tui-rclone-linux-arm64
+            binary_name: tui-rclone
+            command_archive: tar -czf ../tui-rclone-linux-arm64.tar.gz tui-rclone
           - os: windows-latest
             target: x86_64-pc-windows-gnu
-            artifact_name: rclone-tui-windows-amd64
-            binary_name: rclone-tui.exe
-            command_archive: tar -a -c -f ../rclone-tui-windows-amd64.zip rclone-tui.exe
+            artifact_name: tui-rclone-windows-amd64
+            binary_name: tui-rclone.exe
+            command_archive: tar -a -c -f ../tui-rclone-windows-amd64.zip tui-rclone.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-gnullvm
-            artifact_name: rclone-tui-windows-arm64
-            binary_name: rclone-tui.exe
-            command_archive: tar -a -c -f ../rclone-tui-windows-arm64.zip rclone-tui.exe
+            artifact_name: tui-rclone-windows-arm64
+            binary_name: tui-rclone.exe
+            command_archive: tar -a -c -f ../tui-rclone-windows-arm64.zip tui-rclone.exe
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            artifact_name: rclone-tui-macos-amd64
-            binary_name: rclone-tui
-            command_archive: tar -czf ../rclone-tui-macos-amd64.tar.gz rclone-tui
+            artifact_name: tui-rclone-macos-amd64
+            binary_name: tui-rclone
+            command_archive: tar -czf ../tui-rclone-macos-amd64.tar.gz tui-rclone
           - os: macos-15
             target: aarch64-apple-darwin
-            artifact_name: rclone-tui-macos-arm64
-            binary_name: rclone-tui
-            command_archive: tar -czf ../rclone-tui-macos-arm64.tar.gz rclone-tui
+            artifact_name: tui-rclone-macos-arm64
+            binary_name: tui-rclone
+            command_archive: tar -czf ../tui-rclone-macos-arm64.tar.gz tui-rclone
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -102,7 +102,7 @@ jobs:
           "$("${{ steps.msys2.outputs.msys2-location }}")\clangarm64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       # Compile librclone as C-archive (static library)
-      # Located in the root of the repo (parent of rclone-tui)
+      # Located in the root of the repo (parent of TUI-RClone)
       - name: Compile Go librclone (Linux x64)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -139,23 +139,23 @@ jobs:
           go build -buildmode=c-archive -o librclone.a github.com/rclone/rclone/librclone
 
       # Compile the Rust TUI in release mode (native / non-cross-compiled)
-      - name: Build Rust rclone-tui
+      - name: Build Rust tui-rclone
         if: matrix.target != 'aarch64-unknown-linux-gnu' || runner.arch == 'ARM64'
         shell: bash
         env:
           CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER: ${{ steps.msys2.outputs.msys2-location }}/clangarm64/bin/clang
           RUSTFLAGS: ${{ runner.os == 'macOS' && '-C link-arg=-lresolv' || '' }}
         run: |
-          cd rclone-tui
+          cd TUI-RClone
           cargo build --release --target ${{ matrix.target }}
 
       # Compile the Rust TUI in release mode (Linux aarch64 cross-compile on x64 host)
-      - name: Build Rust rclone-tui (aarch64-linux-gnu cross-compile)
+      - name: Build Rust tui-rclone (aarch64-linux-gnu cross-compile)
         if: matrix.target == 'aarch64-unknown-linux-gnu' && runner.arch != 'ARM64'
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cd rclone-tui
+          cd TUI-RClone
           cargo build --release --target ${{ matrix.target }}
 
       # Package the binary into .tar.gz or .zip
@@ -163,7 +163,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p build_out
-          cp rclone-tui/target/${{ matrix.target }}/release/${{ matrix.binary_name }} build_out/
+          cp TUI-RClone/target/${{ matrix.target }}/release/${{ matrix.binary_name }} build_out/
           cd build_out
           ${{ matrix.command_archive }}
 
@@ -186,14 +186,14 @@ jobs:
           # Create temporary folder
           mkdir -p pkg_build/DEBIAN
           mkdir -p pkg_build/usr/bin
-          cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui pkg_build/usr/bin/
+          cp TUI-RClone/target/${{ matrix.target }}/release/tui-rclone pkg_build/usr/bin/
           
           # Extract version from tag name (e.g. tui-v1.75.0.0.1 -> 1.75.0.0.1)
           PKG_VERSION=$(echo "${{ github.ref_name }}" | sed 's/tui-v//')
           
           # Write control file
           cat > pkg_build/DEBIAN/control <<EOF
-          Package: rclone-tui
+          Package: tui-rclone
           Version: $PKG_VERSION
           Section: utils
           Priority: optional
@@ -203,11 +203,11 @@ jobs:
           EOF
           
           # Build .deb
-          dpkg-deb --build pkg_build rclone-tui-linux-$DEB_ARCH.deb
+          dpkg-deb --build pkg_build tui-rclone-linux-$DEB_ARCH.deb
           
           # Convert .deb to .rpm
-          sudo alien --to-rpm rclone-tui-linux-$DEB_ARCH.deb
-          sudo mv rclone-tui-*.rpm rclone-tui-linux-$RPM_ARCH.rpm
+          sudo alien --to-rpm tui-rclone-linux-$DEB_ARCH.deb
+          sudo mv tui-rclone-*.rpm tui-rclone-linux-$RPM_ARCH.rpm
           
           # Build AppImage (only for x86_64 to ensure tool compatibility)
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
@@ -216,37 +216,37 @@ jobs:
             chmod +x appimagetool-x86_64.AppImage
             
             mkdir -p AppDir/usr/bin
-            cp rclone-tui/target/${{ matrix.target }}/release/rclone-tui AppDir/usr/bin/
+            cp TUI-RClone/target/${{ matrix.target }}/release/tui-rclone AppDir/usr/bin/
             
             # Create AppRun
             cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
           SELF=$(readlink -f "$0")
           HERE=$(dirname "$SELF")
-          exec "$HERE/usr/bin/rclone-tui" "$@"
+          exec "$HERE/usr/bin/tui-rclone" "$@"
           EOF
             chmod +x AppDir/AppRun
             
             # Create desktop file
-            cat > AppDir/rclone-tui.desktop <<EOF
+            cat > AppDir/tui-rclone.desktop <<EOF
           [Desktop Entry]
           Type=Application
           Name=Rclone TUI
           Comment=Rclone Terminal User Interface Dashboard
-          Exec=rclone-tui
-          Icon=rclone-tui
+          Exec=tui-rclone
+          Icon=tui-rclone
           Categories=Utility;
           EOF
             
             # Create SVG icon
-            cat > AppDir/rclone-tui.svg <<EOF
+            cat > AppDir/tui-rclone.svg <<EOF
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
             <rect width="100" height="100" fill="#2d3748" rx="20"/>
             <text x="50" y="65" font-family="monospace" font-weight="bold" font-size="50" fill="#f7fafc" text-anchor="middle">R</text>
           </svg>
           EOF
             
-            ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir rclone-tui-linux-x86_64.AppImage
+            ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir tui-rclone-linux-x86_64.AppImage
           fi
 
       # Upload Artifacts to Action Run

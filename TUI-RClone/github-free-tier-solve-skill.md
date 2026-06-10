@@ -104,12 +104,12 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
 * **Quy tắc khắc phục**: Tất cả nội dung nằm trong khối heredoc và thẻ đóng `EOF` phải được viết sát lề trái, căn chỉnh chính xác theo mức thụt lề cơ bản của block `run: |` (thường là 10 khoảng trắng):
   ```yaml
         run: |
-          cat > AppDir/rclone-tui.desktop <<EOF
+          cat > AppDir/tui-rclone.desktop <<EOF
           [Desktop Entry]
           Type=Application
           Name=Rclone TUI
-          Exec=rclone-tui
-          Icon=rclone-tui
+          Exec=tui-rclone
+          Icon=tui-rclone
           Categories=Utility;
           EOF
   ```
@@ -130,13 +130,13 @@ Khi liên kết tĩnh thư viện viết bằng Go CGO vào dự án Rust trên 
   ```bash
   sudo apt-get install -y alien rpm
   # Chuyển đổi gói deb sang rpm
-  sudo alien --to-rpm rclone-tui-linux-amd64.deb
+  sudo alien --to-rpm tui-rclone-linux-amd64.deb
   ```
 
 ---
 
 ## 4. Giao Thức Tự Tiến Hóa & Cập Nhật Skill (Self-Evolution Protocol)
 
-Tệp tài liệu kỹ năng này tuân thủ giao thức tự tiến hóa chung của dự án. Quy trình cập nhật bài học kinh nghiệm và đồng bộ hóa tri thức giữa các phiên làm việc được thực hiện theo quy chuẩn tại [self-evolution-skill.md](file:///home/bimatkeo/Documents/Rclone_Clone/rclone/rclone-tui/self-evolution-skill.md).
+Tệp tài liệu kỹ năng này tuân thủ giao thức tự tiến hóa chung của dự án. Quy trình cập nhật bài học kinh nghiệm và đồng bộ hóa tri thức giữa các phiên làm việc được thực hiện theo quy chuẩn tại [self-evolution-skill.md](file:///home/bimatkeo/Documents/Rclone_Clone/rclone/TUI-RClone/self-evolution-skill.md).
 
 

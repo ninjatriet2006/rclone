@@ -1,5 +1,5 @@
 [package]
-name = "rclonetuiv2"
+name = "modular-tui-rclone"
 version = "0.1.0"
 edition = "2024"
 

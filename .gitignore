@@ -1,7 +1,7 @@
 *~
 _junk/
-rclone
-rclone.exe
+/rclone
+/rclone.exe
 build
 /docs/public/
 /docs/.hugo_build.lock
@@ -35,5 +35,5 @@ Cargo.lock.bak
 
 # Compiled local binaries
 rclone_bin
-rclone-tui-remodel/target/
-rclonetuiv2/target/
+TUI-RClone/target/
+ModularTUI-Rclone/target/
