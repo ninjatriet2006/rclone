@@ -25,6 +25,12 @@ pub enum WizardState {
         selected_idx: usize, // 0: Simple OAuth, 1: Headless OAuth, 2: Advanced Setup
         selected_providers: Vec<String>,
     },
+    SelectZohoRegion {
+        provider: String,
+        remote_name: String,
+        selected_idx: usize,
+        selected_providers: Vec<String>,
+    },
     HeadlessOAuthInput {
         provider: String,
         remote_name: String,
@@ -236,6 +242,13 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect, filen_cli_in
             ..
         } => {
             draw_select_auth_mode_wizard(frame, provider, remote_name, *selected_idx);
+        }
+        WizardState::SelectZohoRegion {
+            remote_name,
+            selected_idx,
+            ..
+        } => {
+            draw_select_zoho_region_wizard(frame, remote_name, *selected_idx);
         }
         WizardState::HeadlessOAuthInput {
             provider,
@@ -552,6 +565,79 @@ fn draw_select_auth_mode_wizard(
 
     let list = List::new(items).block(block);
     frame.render_widget(list, area);
+}
+
+fn draw_select_zoho_region_wizard(
+    frame: &mut Frame,
+    remote_name: &str,
+    selected_idx: usize,
+) {
+    let size = frame.size();
+    let area = centered_rect(55, 45, size);
+    frame.render_widget(Clear, area);
+
+    let regions = vec![
+        "United States / Global (com)",
+        "Europe (eu)",
+        "India (in)",
+        "Japan (jp)",
+        "China (com.cn)",
+        "Australia (com.au)",
+    ];
+
+    let items: Vec<ListItem> = regions
+        .iter()
+        .enumerate()
+        .map(|(i, region)| {
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("  {}", region)).style(style)
+        })
+        .collect();
+
+    let title_raw = crate::lang::translate("conn_wizard_zoho_region_title");
+    let title_fmt = format!(" {} ", title_raw.replace("{}", remote_name));
+    let prompt = crate::lang::translate("conn_wizard_zoho_region_prompt");
+
+    // We can show the prompt text inside the block or as a header.
+    // Let's create a list with items, but also add a description paragraph.
+    // Or even simpler: the block has a title, and we render the options. That's very clean and matches the other wizards.
+    let block = Block::default()
+        .title(Span::styled(
+            title_fmt,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    // Let's split the area to draw a prompt instruction and the selection list.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Prompt text
+            Constraint::Min(2),    // List of regions
+        ])
+        .split(block.inner(area));
+
+    // Draw prompt
+    let prompt_para = Paragraph::new(prompt)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .style(Style::default().fg(Color::White));
+    
+    // Draw background block border around the whole wizard
+    frame.render_widget(&block, area);
+    frame.render_widget(prompt_para, chunks[0]);
+
+    let list = List::new(items);
+    frame.render_widget(list, chunks[1]);
 }
 
 fn draw_simple_oauth_wizard(frame: &mut Frame, provider: &str, remote_name: &str, auth_url: &str) {

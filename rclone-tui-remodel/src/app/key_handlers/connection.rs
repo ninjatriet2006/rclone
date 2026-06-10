@@ -611,63 +611,73 @@ impl App {
                             let remote_clone = remote_name.clone();
                             let providers_clone = selected_providers.clone();
 
-                            self.connection_state.wizard =
-                                ui::connection::WizardState::SimpleOAuthLoop {
-                                    provider: prov_clone.clone(),
-                                    remote_name: remote_clone.clone(),
-                                    auth_url:
-                                        "Đang yêu cầu máy chủ Google/Rclone cấp link xác thực..."
-                                            .to_string(),
-                                    selected_providers: providers_clone.clone(),
-                                };
+                            if prov_clone.to_lowercase() == "zoho" {
+                                self.connection_state.wizard =
+                                    ui::connection::WizardState::SelectZohoRegion {
+                                        provider: prov_clone,
+                                        remote_name: remote_clone,
+                                        selected_idx: 0,
+                                        selected_providers: providers_clone,
+                                    };
+                            } else {
+                                self.connection_state.wizard =
+                                    ui::connection::WizardState::SimpleOAuthLoop {
+                                        provider: prov_clone.clone(),
+                                        remote_name: remote_clone.clone(),
+                                        auth_url:
+                                            "Đang yêu cầu máy chủ Google/Rclone cấp link xác thực..."
+                                                .to_string(),
+                                        selected_providers: providers_clone.clone(),
+                                    };
 
-                            let tx_oauth = tx.clone();
-                            tokio::spawn(async move {
-                                // Gọi API tạo config tự động
-                                let param = json!({
-                                    "name": remote_clone,
-                                    "type": prov_clone,
-                                    "parameters": {
-                                        "config_is_local": "true",
-                                        "config_automatic": "true"
-                                    }
-                                })
-                                .to_string();
+                                let tx_oauth = tx.clone();
+                                tokio::spawn(async move {
+                                    // Gọi API tạo config tự động
+                                    let param = json!({
+                                        "name": remote_clone,
+                                        "type": prov_clone,
+                                        "parameters": {
+                                            "config_is_local": "true",
+                                            "config_automatic": "true"
+                                        }
+                                    })
+                                    .to_string();
 
-                                // Ở đây giả lập/gọi RPC Rclone thực tế.
-                                // RPC config/create cho OAuth tự động trả URL trong stdout
-                                let res =
-                                    rclone::rpc_async("config/create".to_string(), param).await;
-                                match res {
-                                    Ok(_) => {
-                                        let _ = tx_oauth
-                                            .send(AppEvent::OAuthFinished { result: Ok(()) });
+                                    // Ở đây giả lập/gọi RPC Rclone thực tế.
+                                    // RPC config/create cho OAuth tự động trả URL trong stdout
+                                    let res =
+                                        rclone::rpc_async("config/create".to_string(), param).await;
+                                    match res {
+                                        Ok(_) => {
+                                            let _ = tx_oauth
+                                                .send(AppEvent::OAuthFinished { result: Ok(()) });
+                                        }
+                                        Err(e) => {
+                                            let _ = tx_oauth
+                                                .send(AppEvent::OAuthFinished { result: Err(e) });
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = tx_oauth
-                                            .send(AppEvent::OAuthFinished { result: Err(e) });
-                                    }
-                                }
-                            });
+                                });
 
-                            let tx_poll = tx.clone();
-                            tokio::spawn(async move {
-                                // Poll config/oauthstatus for 60 seconds (300 iterations * 200ms)
-                                for _ in 0..300 {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                                    let status_res = rclone::rpc_async("config/oauthstatus".to_string(), "{}".to_string()).await;
-                                    if let Ok(res) = status_res {
-                                        if let Ok(status_val) = serde_json::from_str::<serde_json::Value>(&res.output) {
-                                            if status_val.get("status").and_then(|s| s.as_str()) == Some("running") {
-                                                if let Some(auth_url) = status_val.get("authUrl").and_then(|u| u.as_str()) {
-                                                    let _ = tx_poll.send(AppEvent::OAuthUrlReceived { url: auth_url.to_string() });
-                                                    break;
+                                let tx_poll = tx.clone();
+                                tokio::spawn(async move {
+                                    // Poll config/oauthstatus for 60 seconds (300 iterations * 200ms)
+                                    for _ in 0..300 {
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                                        let status_res = rclone::rpc_async("config/oauthstatus".to_string(), "{}".to_string()).await;
+                                        if let Ok(res) = status_res {
+                                            if let Ok(status_val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                                                if status_val.get("status").and_then(|s| s.as_str()) == Some("running") {
+                                                    if let Some(auth_url) = status_val.get("authUrl").and_then(|u| u.as_str()) {
+                                                        let _ = tx_poll.send(AppEvent::OAuthUrlReceived { url: auth_url.to_string() });
+                                                        break;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
                         } else if selected_idx == 1 {
                             // Headless OAuth
                             self.connection_state.wizard =
@@ -874,6 +884,107 @@ impl App {
                                 self.connection_state.error_message = Some(format!("Lỗi gọi RPC: {}", e));
                             }
                         }
+                    }
+                    _ => {}
+                }
+            }
+            ui::connection::WizardState::SelectZohoRegion {
+                provider,
+                remote_name,
+                mut selected_idx,
+                selected_providers,
+            } => {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.connection_state.wizard = ui::connection::WizardState::SelectAuthMode {
+                            provider,
+                            remote_name,
+                            selected_idx: 0,
+                            selected_providers,
+                        };
+                    }
+                    KeyCode::Up => {
+                        selected_idx = if selected_idx == 0 { 5 } else { selected_idx - 1 };
+                        self.connection_state.wizard = ui::connection::WizardState::SelectZohoRegion {
+                            provider,
+                            remote_name,
+                            selected_idx,
+                            selected_providers,
+                        };
+                    }
+                    KeyCode::Down | KeyCode::Tab => {
+                        selected_idx = (selected_idx + 1) % 6;
+                        self.connection_state.wizard = ui::connection::WizardState::SelectZohoRegion {
+                            provider,
+                            remote_name,
+                            selected_idx,
+                            selected_providers,
+                        };
+                    }
+                    KeyCode::Enter => {
+                        let regions = vec!["com", "eu", "in", "jp", "com.cn", "com.au"];
+                        let selected_region = regions[selected_idx].to_string();
+
+                        let prov_clone = provider.clone();
+                        let remote_clone = remote_name.clone();
+                        let providers_clone = selected_providers.clone();
+
+                        self.connection_state.wizard =
+                            ui::connection::WizardState::SimpleOAuthLoop {
+                                provider: prov_clone.clone(),
+                                remote_name: remote_clone.clone(),
+                                auth_url:
+                                    "Đang yêu cầu máy chủ Google/Rclone cấp link xác thực..."
+                                        .to_string(),
+                                selected_providers: providers_clone.clone(),
+                            };
+
+                        let tx_oauth = tx.clone();
+                        tokio::spawn(async move {
+                            // Gọi API tạo config tự động với region được chọn
+                            let param = json!({
+                                "name": remote_clone,
+                                "type": prov_clone,
+                                "parameters": {
+                                    "config_is_local": "true",
+                                    "config_automatic": "true",
+                                    "region": selected_region
+                                }
+                            })
+                            .to_string();
+
+                            let res =
+                                rclone::rpc_async("config/create".to_string(), param).await;
+                            match res {
+                                Ok(_) => {
+                                    let _ = tx_oauth
+                                        .send(AppEvent::OAuthFinished { result: Ok(()) });
+                                }
+                                Err(e) => {
+                                    let _ = tx_oauth
+                                        .send(AppEvent::OAuthFinished { result: Err(e) });
+                                }
+                            }
+                        });
+
+                        let tx_poll = tx.clone();
+                        tokio::spawn(async move {
+                            // Poll config/oauthstatus for 60 seconds (300 iterations * 200ms)
+                            for _ in 0..300 {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                                let status_res = rclone::rpc_async("config/oauthstatus".to_string(), "{}".to_string()).await;
+                                if let Ok(res) = status_res {
+                                    if let Ok(status_val) = serde_json::from_str::<serde_json::Value>(&res.output) {
+                                        if status_val.get("status").and_then(|s| s.as_str()) == Some("running") {
+                                            if let Some(auth_url) = status_val.get("authUrl").and_then(|u| u.as_str()) {
+                                                let _ = tx_poll.send(AppEvent::OAuthUrlReceived { url: auth_url.to_string() });
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     }
                     _ => {}
                 }
