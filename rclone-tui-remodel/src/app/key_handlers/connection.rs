@@ -139,26 +139,28 @@ impl App {
                                                                         .unwrap_or("");
                                                                     let mut choices = Vec::new();
                                                                     if opt_type == "bool" {
-                                                                        choices.push(
+                                                                        choices.push((
                                                                             "true".to_string(),
-                                                                        );
-                                                                        choices.push(
+                                                                            "Đồng ý / Kích hoạt / Bật".to_string(),
+                                                                        ));
+                                                                        choices.push((
                                                                             "false".to_string(),
-                                                                        );
+                                                                            "Từ chối / Vô hiệu hóa / Tắt".to_string(),
+                                                                        ));
                                                                     }
                                                                     if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
                                                                         choices = vec![
-                                                                            "epall".to_string(),
-                                                                            "epmfs".to_string(),
-                                                                            "eplfs".to_string(),
-                                                                            "eprand".to_string(),
-                                                                            "epnewest".to_string(),
-                                                                            "ff".to_string(),
-                                                                            "mfs".to_string(),
-                                                                            "lfs".to_string(),
-                                                                            "rand".to_string(),
-                                                                            "all".to_string(),
-                                                                            "newest".to_string(),
+                                                                            ("epall".to_string(), "Existing Path, All: Chạy lệnh trên tất cả các cloud thành viên chứa đường dẫn.".to_string()),
+                                                                            ("epmfs".to_string(), "Existing Path, Most Free Space: Ghi vào cloud thành viên chứa đường dẫn và có nhiều dung lượng trống nhất.".to_string()),
+                                                                            ("eplfs".to_string(), "Existing Path, Least Free Space: Ghi vào cloud thành viên chứa đường dẫn và có ít dung lượng trống nhất.".to_string()),
+                                                                            ("eprand".to_string(), "Existing Path, Random: Chọn ngẫu nhiên một cloud thành viên chứa đường dẫn.".to_string()),
+                                                                            ("epnewest".to_string(), "Existing Path, Newest: Chọn cloud thành viên chứa đường dẫn có tệp tin mới nhất.".to_string()),
+                                                                            ("ff".to_string(), "First Found: Chọn cloud thành viên đầu tiên tìm thấy chứa đường dẫn.".to_string()),
+                                                                            ("mfs".to_string(), "Most Free Space: Ghi vào cloud thành viên có nhiều dung lượng trống nhất.".to_string()),
+                                                                            ("lfs".to_string(), "Least Free Space: Ghi vào cloud thành viên có ít dung lượng trống nhất.".to_string()),
+                                                                            ("rand".to_string(), "Random: Chọn ngẫu nhiên một cloud thành viên.".to_string()),
+                                                                            ("all".to_string(), "All: Chạy lệnh trên tất cả các cloud thành viên.".to_string()),
+                                                                            ("newest".to_string(), "Newest: Chọn cloud thành viên có tệp tin mới nhất.".to_string()),
                                                                         ];
                                                                     }
                                                                     if let Some(examples_arr) =
@@ -175,9 +177,15 @@ impl App {
                                                                                     v.as_str()
                                                                                 })
                                                                             {
-                                                                                choices.push(
+                                                                                let help = ex
+                                                                                    .get("Help")
+                                                                                    .and_then(|h| h.as_str())
+                                                                                    .unwrap_or("")
+                                                                                    .to_string();
+                                                                                choices.push((
                                                                                     val.to_string(),
-                                                                                );
+                                                                                    help,
+                                                                                ));
                                                                             }
                                                                         }
                                                                     }
@@ -185,7 +193,8 @@ impl App {
                                                                         Vec::new();
                                                                     for c in choices {
                                                                         if !unique_choices
-                                                                            .contains(&c)
+                                                                            .iter()
+                                                                            .any(|(val, _)| val == &c.0)
                                                                         {
                                                                             unique_choices.push(c);
                                                                         }
@@ -517,22 +526,28 @@ impl App {
                                                         .unwrap_or("");
                                                     let mut choices = Vec::new();
                                                     if opt_type == "bool" {
-                                                        choices.push("true".to_string());
-                                                        choices.push("false".to_string());
+                                                        choices.push((
+                                                            "true".to_string(),
+                                                            "Đồng ý / Kích hoạt / Bật".to_string(),
+                                                        ));
+                                                        choices.push((
+                                                            "false".to_string(),
+                                                            "Từ chối / Vô hiệu hóa / Tắt".to_string(),
+                                                        ));
                                                     }
                                                     if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
                                                         choices = vec![
-                                                            "epall".to_string(),
-                                                            "epmfs".to_string(),
-                                                            "eplfs".to_string(),
-                                                            "eprand".to_string(),
-                                                            "epnewest".to_string(),
-                                                            "ff".to_string(),
-                                                            "mfs".to_string(),
-                                                            "lfs".to_string(),
-                                                            "rand".to_string(),
-                                                            "all".to_string(),
-                                                            "newest".to_string(),
+                                                            ("epall".to_string(), "Existing Path, All: Chạy lệnh trên tất cả các cloud thành viên chứa đường dẫn.".to_string()),
+                                                            ("epmfs".to_string(), "Existing Path, Most Free Space: Ghi vào cloud thành viên chứa đường dẫn và có nhiều dung lượng trống nhất.".to_string()),
+                                                            ("eplfs".to_string(), "Existing Path, Least Free Space: Ghi vào cloud thành viên chứa đường dẫn và có ít dung lượng trống nhất.".to_string()),
+                                                            ("eprand".to_string(), "Existing Path, Random: Chọn ngẫu nhiên một cloud thành viên chứa đường dẫn.".to_string()),
+                                                            ("epnewest".to_string(), "Existing Path, Newest: Chọn cloud thành viên chứa đường dẫn có tệp tin mới nhất.".to_string()),
+                                                            ("ff".to_string(), "First Found: Chọn cloud thành viên đầu tiên tìm thấy chứa đường dẫn.".to_string()),
+                                                            ("mfs".to_string(), "Most Free Space: Ghi vào cloud thành viên có nhiều dung lượng trống nhất.".to_string()),
+                                                            ("lfs".to_string(), "Least Free Space: Ghi vào cloud thành viên có ít dung lượng trống nhất.".to_string()),
+                                                            ("rand".to_string(), "Random: Chọn ngẫu nhiên một cloud thành viên.".to_string()),
+                                                            ("all".to_string(), "All: Chạy lệnh trên tất cả các cloud thành viên.".to_string()),
+                                                            ("newest".to_string(), "Newest: Chọn cloud thành viên có tệp tin mới nhất.".to_string()),
                                                         ];
                                                     }
                                                     if let Some(examples_arr) = opt_val
@@ -544,13 +559,24 @@ impl App {
                                                                 .get("Value")
                                                                 .and_then(|v| v.as_str())
                                                             {
-                                                                choices.push(val.to_string());
+                                                                let help = ex
+                                                                    .get("Help")
+                                                                    .and_then(|h| h.as_str())
+                                                                    .unwrap_or("")
+                                                                    .to_string();
+                                                                choices.push((
+                                                                    val.to_string(),
+                                                                    help,
+                                                                ));
                                                             }
                                                         }
                                                     }
                                                     let mut unique_choices = Vec::new();
                                                     for c in choices {
-                                                        if !unique_choices.contains(&c) {
+                                                        if !unique_choices
+                                                            .iter()
+                                                            .any(|(val, _)| val == &c.0)
+                                                        {
                                                             unique_choices.push(c);
                                                         }
                                                     }
@@ -769,22 +795,28 @@ impl App {
                                                         .unwrap_or("");
                                                     let mut choices = Vec::new();
                                                     if opt_type == "bool" {
-                                                        choices.push("true".to_string());
-                                                        choices.push("false".to_string());
+                                                        choices.push((
+                                                            "true".to_string(),
+                                                            "Đồng ý / Kích hoạt / Bật".to_string(),
+                                                        ));
+                                                        choices.push((
+                                                            "false".to_string(),
+                                                            "Từ chối / Vô hiệu hóa / Tắt".to_string(),
+                                                        ));
                                                     }
                                                     if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
                                                         choices = vec![
-                                                            "epall".to_string(),
-                                                            "epmfs".to_string(),
-                                                            "eplfs".to_string(),
-                                                            "eprand".to_string(),
-                                                            "epnewest".to_string(),
-                                                            "ff".to_string(),
-                                                            "mfs".to_string(),
-                                                            "lfs".to_string(),
-                                                            "rand".to_string(),
-                                                            "all".to_string(),
-                                                            "newest".to_string(),
+                                                            ("epall".to_string(), "Existing Path, All: Chạy lệnh trên tất cả các cloud thành viên chứa đường dẫn.".to_string()),
+                                                            ("epmfs".to_string(), "Existing Path, Most Free Space: Ghi vào cloud thành viên chứa đường dẫn và có nhiều dung lượng trống nhất.".to_string()),
+                                                            ("eplfs".to_string(), "Existing Path, Least Free Space: Ghi vào cloud thành viên chứa đường dẫn và có ít dung lượng trống nhất.".to_string()),
+                                                            ("eprand".to_string(), "Existing Path, Random: Chọn ngẫu nhiên một cloud thành viên chứa đường dẫn.".to_string()),
+                                                            ("epnewest".to_string(), "Existing Path, Newest: Chọn cloud thành viên chứa đường dẫn có tệp tin mới nhất.".to_string()),
+                                                            ("ff".to_string(), "First Found: Chọn cloud thành viên đầu tiên tìm thấy chứa đường dẫn.".to_string()),
+                                                            ("mfs".to_string(), "Most Free Space: Ghi vào cloud thành viên có nhiều dung lượng trống nhất.".to_string()),
+                                                            ("lfs".to_string(), "Least Free Space: Ghi vào cloud thành viên có ít dung lượng trống nhất.".to_string()),
+                                                            ("rand".to_string(), "Random: Chọn ngẫu nhiên một cloud thành viên.".to_string()),
+                                                            ("all".to_string(), "All: Chạy lệnh trên tất cả các cloud thành viên.".to_string()),
+                                                            ("newest".to_string(), "Newest: Chọn cloud thành viên có tệp tin mới nhất.".to_string()),
                                                         ];
                                                     }
                                                     if let Some(examples_arr) = opt_val
@@ -796,13 +828,24 @@ impl App {
                                                                 .get("Value")
                                                                 .and_then(|v| v.as_str())
                                                             {
-                                                                choices.push(val.to_string());
+                                                                let help = ex
+                                                                    .get("Help")
+                                                                    .and_then(|h| h.as_str())
+                                                                    .unwrap_or("")
+                                                                    .to_string();
+                                                                choices.push((
+                                                                    val.to_string(),
+                                                                    help,
+                                                                ));
                                                             }
                                                         }
                                                     }
                                                     let mut unique_choices = Vec::new();
                                                     for c in choices {
-                                                        if !unique_choices.contains(&c) {
+                                                        if !unique_choices
+                                                            .iter()
+                                                            .any(|(val, _)| val == &c.0)
+                                                        {
                                                             unique_choices.push(c);
                                                         }
                                                     }
@@ -1055,7 +1098,7 @@ impl App {
                 active_tab,
             } => {
                 // Lọc danh sách fields theo tab
-                let filtered_fields: Vec<(String, String, String, Vec<String>, bool)> = fields
+                let filtered_fields: Vec<(String, String, String, Vec<(String, String)>, bool)> = fields
                     .iter()
                     .filter(|(name, _, _, _, required)| {
                         if active_tab == 0 {
@@ -1111,7 +1154,7 @@ impl App {
                         if !choices.is_empty()
                             && (key.code == KeyCode::Up || key.code == KeyCode::Down)
                         {
-                            let current_idx = choices.iter().position(|c| c == &input_buffer);
+                            let current_idx = choices.iter().position(|(c, _)| c == &input_buffer);
                             let next_idx = match current_idx {
                                 Some(idx) => {
                                     if key.code == KeyCode::Up {
@@ -1122,7 +1165,7 @@ impl App {
                                 }
                                 None => 0,
                             };
-                            input_buffer = choices[next_idx].clone();
+                            input_buffer = choices[next_idx].0.clone();
                             self.connection_state.wizard =
                                 ui::connection::WizardState::AdvancedSetup {
                                     provider,
@@ -1322,15 +1365,12 @@ impl App {
                                     let name_lower = field_name.to_lowercase();
                                     if name_lower == "remote" {
                                         for r in &self.connection_state.remotes {
-                                            field_choices.push(format!("{}:", r));
+                                            field_choices.push((format!("{}:", r), String::new()));
                                         }
                                     }
                                     if !field_choices.is_empty() {
-                                        if !field_choices.contains(&"Nhập thủ công...".to_string()) {
-                                            field_choices.push("Nhập thủ công...".to_string());
-                                        }
                                         let current_val = f.2.clone();
-                                        let choices_selected_idx = field_choices.iter().position(|c| c == &current_val).unwrap_or(0);
+                                        let choices_selected_idx = field_choices.iter().position(|(c, _)| c == &current_val).unwrap_or(0);
                                         self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
                                             provider,
                                             remote_name,
@@ -1482,7 +1522,7 @@ impl App {
                 active_tab,
             } => {
                 // Lọc danh sách fields theo tab
-                let filtered_fields: Vec<(String, String, String, Vec<String>, bool)> = fields
+                let filtered_fields: Vec<(String, String, String, Vec<(String, String)>, bool)> = fields
                     .iter()
                     .filter(|(name, _, _, _, required)| {
                         if active_tab == 0 {
@@ -1539,7 +1579,7 @@ impl App {
                         if !choices.is_empty()
                             && (key.code == KeyCode::Up || key.code == KeyCode::Down)
                         {
-                            let current_idx = choices.iter().position(|c| c == &input_buffer);
+                            let current_idx = choices.iter().position(|(c, _)| c == &input_buffer);
                             let next_idx = match current_idx {
                                 Some(idx) => {
                                     if key.code == KeyCode::Up {
@@ -1550,7 +1590,7 @@ impl App {
                                 }
                                 None => 0,
                             };
-                            input_buffer = choices[next_idx].clone();
+                            input_buffer = choices[next_idx].0.clone();
                             self.connection_state.wizard = ui::connection::WizardState::EditSetup {
                                 remote_name,
                                 provider,
@@ -1754,15 +1794,12 @@ impl App {
                                     let name_lower = field_name.to_lowercase();
                                     if name_lower == "remote" {
                                         for r in &self.connection_state.remotes {
-                                            field_choices.push(format!("{}:", r));
+                                            field_choices.push((format!("{}:", r), String::new()));
                                         }
                                     }
                                     if !field_choices.is_empty() {
-                                        if !field_choices.contains(&"Nhập thủ công...".to_string()) {
-                                            field_choices.push("Nhập thủ công...".to_string());
-                                        }
                                         let current_val = f.2.clone();
-                                        let choices_selected_idx = field_choices.iter().position(|c| c == &current_val).unwrap_or(0);
+                                        let choices_selected_idx = field_choices.iter().position(|(c, _)| c == &current_val).unwrap_or(0);
                                         self.connection_state.wizard = ui::connection::WizardState::SelectOneChoice {
                                             provider,
                                             remote_name,
@@ -2066,68 +2103,35 @@ impl App {
                         };
                     }
                     KeyCode::Enter => {
-                        let selected_choice = &choices[choices_selected_idx];
-                        if selected_choice == "Nhập thủ công..." {
-                            if is_edit_mode {
-                                let current_val = fields.iter().find(|f| f.0 == field_name).map(|f| f.2.clone()).unwrap_or_default();
-                                self.connection_state.edit_cursor_idx = current_val.chars().count();
-                                self.connection_state.wizard = ui::connection::WizardState::EditSetup {
-                                    remote_name,
-                                    provider,
-                                    fields,
-                                    selected_idx: selected_field_idx,
-                                    scroll_offset,
-                                    is_editing: true,
-                                    input_buffer: current_val,
-                                    adding_new_key: false,
-                                    new_key_buffer: String::new(),
-                                    active_tab,
-                                };
-                            } else {
-                                let current_val = fields.iter().find(|f| f.0 == field_name).map(|f| f.2.clone()).unwrap_or_default();
-                                self.connection_state.edit_cursor_idx = current_val.chars().count();
-                                self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
-                                    provider,
-                                    remote_name,
-                                    fields,
-                                    selected_field_idx,
-                                    scroll_offset,
-                                    is_editing: true,
-                                    input_buffer: current_val,
-                                    selected_providers,
-                                    active_tab,
-                                };
-                            }
+                        let (selected_val, _) = &choices[choices_selected_idx];
+                        if let Some(real_idx) = fields.iter().position(|f| f.0 == field_name) {
+                            fields[real_idx].2 = selected_val.clone();
+                        }
+                        if is_edit_mode {
+                            self.connection_state.wizard = ui::connection::WizardState::EditSetup {
+                                remote_name,
+                                provider,
+                                fields,
+                                selected_idx: selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                adding_new_key: false,
+                                new_key_buffer: String::new(),
+                                active_tab,
+                            };
                         } else {
-                            if let Some(real_idx) = fields.iter().position(|f| f.0 == field_name) {
-                                fields[real_idx].2 = selected_choice.clone();
-                            }
-                            if is_edit_mode {
-                                self.connection_state.wizard = ui::connection::WizardState::EditSetup {
-                                    remote_name,
-                                    provider,
-                                    fields,
-                                    selected_idx: selected_field_idx,
-                                    scroll_offset,
-                                    is_editing: false,
-                                    input_buffer: String::new(),
-                                    adding_new_key: false,
-                                    new_key_buffer: String::new(),
-                                    active_tab,
-                                };
-                            } else {
-                                self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
-                                    provider,
-                                    remote_name,
-                                    fields,
-                                    selected_field_idx,
-                                    scroll_offset,
-                                    is_editing: false,
-                                    input_buffer: String::new(),
-                                    selected_providers,
-                                    active_tab,
-                                };
-                            }
+                            self.connection_state.wizard = ui::connection::WizardState::AdvancedSetup {
+                                provider,
+                                remote_name,
+                                fields,
+                                selected_field_idx,
+                                scroll_offset,
+                                is_editing: false,
+                                input_buffer: String::new(),
+                                selected_providers,
+                                active_tab,
+                            };
                         }
                     }
                     _ => {}
@@ -2310,7 +2314,7 @@ fn try_get_filen_api_key() -> Option<String> {
 }
 
 fn validate_required_fields(
-    fields: &[(String, String, String, Vec<String>, bool)],
+    fields: &[(String, String, String, Vec<(String, String)>, bool)],
 ) -> Result<(), Vec<String>> {
     let mut missing_fields = Vec::new();
     for (name, _, val, _, _) in fields.iter() {

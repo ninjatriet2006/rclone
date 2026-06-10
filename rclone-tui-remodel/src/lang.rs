@@ -354,6 +354,58 @@ mon_help: "[Delete]Hủy bỏ (Stop) tác vụ đang chọn|[Mũi tên]Di chuy�
 lang_welcome: "Sử dụng phím Mũi tên Lên/Xuống để di chuyển, Enter để chọn/áp dụng, Esc để quay lại."
 lang_active: "Đang dùng"
 lang_title: " CÀI ĐẶT NGÔN NGỮ "
+client_credentials: "Sử dụng luồng xác thực OAuth Client Credentials. Điều này sẽ sử dụng luồng xác thực Client Credentials OAUTH2 như được mô tả trong RFC 6749."
+client_credentials_friendly: "Xác thực Client Credentials"
+scope: "Quyền hạn truy cập API (ví dụ: drive, drive.readonly). Để trống cho cấu hình mặc định."
+scope_friendly: "Quyền hạn API (Scope)"
+service_account_file: "Đường dẫn trên máy local đến tệp JSON chứng chỉ của tài khoản dịch vụ (Service Account)."
+service_account_file_friendly: "Tệp Service Account JSON"
+service_account_credentials: "Nội dung của tệp JSON chứng chỉ của tài khoản dịch vụ (Service Account)."
+service_account_credentials_friendly: "Nội dung JSON Service Account"
+team_drive: "Mã định danh (ID) của Bộ nhớ dùng chung (Shared Drive / Team Drive) muốn cấu hình làm gốc."
+team_drive_friendly: "Shared/Team Drive ID"
+root_folder_id: "Mã định danh (ID) của thư mục gốc muốn giới hạn quyền truy cập cho kết nối này."
+root_folder_id_friendly: "Mã thư mục gốc (Root Folder ID)"
+auth_owner_only: "Chỉ hiển thị các tệp thuộc quyền sở hữu của tài khoản đăng nhập (true/false)."
+auth_owner_only_friendly: "Chỉ hiển thị tệp sở hữu"
+region: "Vùng hoặc khu vực địa lý của nhà cung cấp dịch vụ lưu trữ."
+region_friendly: "Khu vực (Region)"
+drive_id: "Mã định danh (ID) của ổ đĩa hoặc thư viện tài liệu cần truy cập."
+drive_id_friendly: "Drive ID"
+drive_type: "Loại ổ đĩa kết nối (ví dụ: personal, business, sharepoint)."
+drive_type_friendly: "Loại Drive"
+host: "Địa chỉ IP hoặc tên miền (Hostname) của máy chủ kết nối."
+host_friendly: "Địa chỉ máy chủ (Host)"
+port: "Cổng kết nối dịch vụ (ví dụ: SSH là 22, FTP là 21)."
+port_friendly: "Cổng kết nối (Port)"
+user: "Tên đăng nhập tài khoản của bạn trên máy chủ."
+user_friendly: "Tên đăng nhập (Username)"
+pass: "Mật khẩu đăng nhập tài khoản kết nối."
+pass_friendly: "Mật khẩu (Password)"
+key_file: "Đường dẫn đến tệp khóa riêng SSH Private Key (PEM) trên máy local."
+key_file_friendly: "Tệp SSH Private Key"
+key_use_agent: "Sử dụng SSH Agent để tự động lấy khóa xác thực (true/false)."
+key_use_agent_friendly: "Sử dụng SSH Agent"
+tls: "Sử dụng mã hóa kết nối bảo mật TLS/SSL (true/false)."
+tls_friendly: "Sử dụng TLS"
+url: "Đường dẫn URL kết nối đến máy chủ hoặc dịch vụ API."
+url_friendly: "Đường dẫn URL"
+vendor: "Tên nhà cung cấp WebDAV (ví dụ: nextcloud, owncloud, sharepoint, other)."
+vendor_friendly: "Nhà cung cấp WebDAV"
+bearer_token: "Mã xác thực Bearer token (nếu có, dùng để thay thế mật khẩu đăng nhập thông thường)."
+bearer_token_friendly: "Bearer Token"
+provider: "Nhà cung cấp S3 hoặc dịch vụ đám mây tương thích S3 (Wasabi, Minio, v.v.)."
+provider_friendly: "Nhà cung cấp S3"
+access_key_id: "Access Key ID dùng để xác thực quyền truy cập dịch vụ lưu trữ."
+access_key_id_friendly: "Access Key ID"
+secret_access_key: "Secret Access Key dùng để xác thực quyền truy cập dịch vụ lưu trữ."
+secret_access_key_friendly: "Secret Access Key"
+endpoint: "Địa chỉ Endpoint tùy chỉnh cho dịch vụ lưu trữ đám mây."
+endpoint_friendly: "Endpoint tùy chỉnh"
+acl: "Chính sách kiểm soát quyền truy cập mặc định (ACL) cho các đối tượng tải lên."
+acl_friendly: "Quyền truy cập ACL"
+storage_class: "Lớp lưu trữ của các tệp tin trên hệ thống (ví dụ: STANDARD, COLD, ARCHIVE)."
+storage_class_friendly: "Lớp lưu trữ (Storage Class)"
 "#;
 
     let default_eng = r#"# Rclone-TUI English Translations
@@ -676,6 +728,58 @@ mon_help: "[Delete]Stop selected job|[Arrows]Move|[ESC]Back to Main Menu"
 lang_welcome: "Use Arrow keys Up/Down to navigate, Enter to select/apply, Esc to return."
 lang_active: "Active"
 lang_title: " LANGUAGE SETTINGS "
+client_credentials: "Use client credentials OAuth flow. This will use the OAUTH2 client Credentials Flow as described in RFC 6749."
+client_credentials_friendly: "Client Credentials Auth"
+scope: "Space separated list of scopes that rclone requests on your behalf."
+scope_friendly: "API Scope"
+service_account_file: "Path to service account credentials JSON file."
+service_account_file_friendly: "Service Account JSON File"
+service_account_credentials: "Service Account Credentials JSON file content."
+service_account_credentials_friendly: "Service Account JSON Content"
+team_drive: "ID of the Shared Drive (Team Drive)."
+team_drive_friendly: "Shared/Team Drive ID"
+root_folder_id: "ID of the root folder to start at."
+root_folder_id_friendly: "Root Folder ID"
+auth_owner_only: "Only consider files owned by the authenticated user."
+auth_owner_only_friendly: "Auth Owner Only"
+region: "Region to connect to."
+region_friendly: "Region"
+drive_id: "ID of the drive."
+drive_id_friendly: "Drive ID"
+drive_type: "The type of drive (e.g. personal, business, sharepoint)."
+drive_type_friendly: "Drive Type"
+host: "SSH/SFTP or FTP host to connect to."
+host_friendly: "Host Address"
+port: "Port number for connection."
+port_friendly: "Port Number"
+user: "Username for authentication."
+user_friendly: "Username"
+pass: "Password for authentication."
+pass_friendly: "Password"
+key_file: "Path to private key file."
+key_file_friendly: "Private Key Path"
+key_use_agent: "Whether to use ssh-agent."
+key_use_agent_friendly: "Use SSH Agent"
+tls: "Use TLS security for connection."
+tls_friendly: "Use TLS"
+url: "URL of the HTTP/WebDAV server."
+url_friendly: "Server URL"
+vendor: "The WebDAV service vendor (e.g. nextcloud, owncloud, sharepoint)."
+vendor_friendly: "WebDAV Vendor"
+bearer_token: "Bearer token instead of username/password."
+bearer_token_friendly: "Bearer Token"
+provider: "Choose your S3 provider."
+provider_friendly: "S3 Provider"
+access_key_id: "AWS Access Key ID."
+access_key_id_friendly: "Access Key ID"
+secret_access_key: "AWS Secret Access Key."
+secret_access_key_friendly: "Secret Access Key"
+endpoint: "Endpoint for S3 API."
+endpoint_friendly: "S3 Endpoint"
+acl: "Canned ACL used when creating buckets and storing objects."
+acl_friendly: "Access Control List (ACL)"
+storage_class: "The storage class to use when storing new objects."
+storage_class_friendly: "Storage Class"
 "#;
 
     let vn_path = lang_dir.join("vn.yaml");
@@ -787,22 +891,87 @@ pub fn translate(key: &str) -> String {
 }
 
 /// Dịch mô tả tham số của rclone
+pub fn is_vietnamese() -> bool {
+    let trans = TRANSLATIONS.read().unwrap();
+    trans.get("status_online").map_or(false, |val| val.contains("Trực tuyến"))
+}
+
+/// Dịch mô tả tham số của rclone
 pub fn translate_desc(field_name: &str, english_desc: &str) -> String {
     let trans = TRANSLATIONS.read().unwrap();
     if let Some(val) = trans.get(field_name) {
         return val.clone();
     }
 
-    // Thuật toán dịch một số cụm từ cơ bản nếu không tìm thấy key chính xác
+    // Thuật toán dịch một số cụm từ cơ bản nếu không tìm thấy key chính xác (chỉ dịch sang VN nếu ngôn ngữ đang hoạt động là VN)
     let mut translated = english_desc.to_string();
-    if translated.contains("OAuth Client ID") {
-        translated = translated.replace("OAuth Client ID", "OAuth Client ID của ứng dụng");
-    }
-    if translated.contains("OAuth Client Secret") {
-        translated = translated.replace("OAuth Client Secret", "OAuth Client Secret của ứng dụng");
-    }
-    if translated.contains("Password") {
-        translated = translated.replace("Password", "Mật khẩu");
+    if is_vietnamese() {
+        if translated.contains("Use client credentials OAuth flow.") {
+            translated = translated.replace("Use client credentials OAuth flow.", "Sử dụng luồng xác thực OAuth Client Credentials.");
+        }
+        if translated.contains("This will use the OAUTH2 client Credentials Flow as described in RFC 6749.") {
+            translated = translated.replace("This will use the OAUTH2 client Credentials Flow as described in RFC 6749.", "Thao tác này sẽ sử dụng luồng OAuth2 Client Credentials như mô tả trong RFC 6749.");
+        }
+        if translated.contains("OAuth Client ID") {
+            translated = translated.replace("OAuth Client ID", "OAuth Client ID của ứng dụng");
+        }
+        if translated.contains("OAuth Client Secret") {
+            translated = translated.replace("OAuth Client Secret", "OAuth Client Secret của ứng dụng");
+        }
+        if translated.contains("Leave blank to use the provider default.") {
+            translated = translated.replace("Leave blank to use the provider default.", "Để trống để sử dụng mặc định của nhà cung cấp.");
+        }
+        if translated.contains("Leave blank normally.") {
+            translated = translated.replace("Leave blank normally.", "Thông thường nên để trống.");
+        }
+        if translated.contains("Password or pass phrase for encryption.") {
+            translated = translated.replace("Password or pass phrase for encryption.", "Mật khẩu hoặc cụm từ mật khẩu dùng để mã hóa.");
+        }
+        if translated.contains("Choose a number from below, or type in your own value") {
+            translated = translated.replace("Choose a number from below, or type in your own value", "Chọn một số bên dưới hoặc tự nhập giá trị của bạn");
+        }
+        if translated.contains("Enter a string value. Press Enter to accept the default.") {
+            translated = translated.replace("Enter a string value. Press Enter to accept the default.", "Nhập giá trị chuỗi. Nhấn Enter để dùng mặc định.");
+        }
+        if translated.contains("Optional but recommended.") {
+            translated = translated.replace("Optional but recommended.", "Không bắt buộc nhưng khuyến nghị nên dùng.");
+        }
+        if translated.contains("Should be different to the previous password.") {
+            translated = translated.replace("Should be different to the previous password.", "Nên khác với mật khẩu trước đó.");
+        }
+        if translated.contains("Password") {
+            translated = translated.replace("Password", "Mật khẩu");
+        }
+        if translated.contains("Get GCP IAM credentials from runtime") {
+            translated = translated.replace("Get GCP IAM credentials from runtime", "Lấy thông tin xác thực GCP IAM từ môi trường chạy");
+        }
+        if translated.contains("environment variables or instance meta data") {
+            translated = translated.replace("environment variables or instance meta data", "biến môi trường hoặc siêu dữ liệu phiên bản (instance metadata)");
+        }
+        if translated.contains("Only applies if") {
+            translated = translated.replace("Only applies if", "Chỉ áp dụng nếu");
+        }
+        if translated.contains("is blank") {
+            translated = translated.replace("is blank", "bị để trống");
+        }
+        if translated.contains("Description of the remote.") {
+            translated = translated.replace("Description of the remote.", "Mô tả của kết nối remote này.");
+        }
+        if translated.contains("OAuth access token.") {
+            translated = translated.replace("OAuth access token.", "OAuth access token (thường được rclone tự động cấu hình).");
+        }
+        if translated.contains("How to encrypt the filenames.") {
+            translated = translated.replace("How to encrypt the filenames.", "Phương pháp mã hóa tên tệp tin.");
+        }
+        if translated.contains("Option to either encrypt directory names or leave them intact.") {
+            translated = translated.replace("Option to either encrypt directory names or leave them intact.", "Tùy chọn mã hóa tên thư mục hoặc để nguyên dạng ban đầu.");
+        }
+        if translated.contains("How to encode the encrypted filename to text string.") {
+            translated = translated.replace("How to encode the encrypted filename to text string.", "Cách mã hóa tên tệp đã mã hóa thành chuỗi ký tự văn bản.");
+        }
+        if translated.contains("Option to either encrypt file data or leave it unencrypted.") {
+            translated = translated.replace("Option to either encrypt file data or leave it unencrypted.", "Tùy chọn mã hóa dữ liệu tệp tin hoặc để nguyên không mã hóa.");
+        }
     }
     translated
 }
@@ -817,4 +986,27 @@ pub fn translate_friendly(field_name: &str) -> Option<String> {
     let trans = TRANSLATIONS.read().unwrap();
     let key = format!("{}_friendly", field_name);
     trans.get(&key).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_translations() {
+        // Initialize languages
+        init_languages();
+        
+        // Test with English
+        load_translation("eng");
+        assert_eq!(translate("lang_active"), "Active");
+        assert_eq!(translate_desc("client_credentials", "Use client credentials OAuth flow."), "Use client credentials OAuth flow. This will use the OAUTH2 client Credentials Flow as described in RFC 6749.");
+        assert_eq!(translate_desc("some_random_field", "Use client credentials OAuth flow."), "Use client credentials OAuth flow."); // Fallback: returns original English description without modification
+        
+        // Test with Vietnamese
+        load_translation("vn");
+        assert_eq!(translate("lang_active"), "Đang dùng");
+        assert_eq!(translate_desc("client_credentials", "Use client credentials OAuth flow."), "Sử dụng luồng xác thực OAuth Client Credentials. Điều này sẽ sử dụng luồng xác thực Client Credentials OAUTH2 như được mô tả trong RFC 6749.");
+        assert_eq!(translate_desc("some_random_field", "Use client credentials OAuth flow."), "Sử dụng luồng xác thực OAuth Client Credentials."); // Fallback: replaces with Vietnamese translation dynamically
+    }
 }

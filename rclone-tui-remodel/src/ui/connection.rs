@@ -49,7 +49,7 @@ pub enum WizardState {
     AdvancedSetup {
         provider: String,
         remote_name: String,
-        fields: Vec<(String, String, String, Vec<String>, bool)>, // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
+        fields: Vec<(String, String, String, Vec<(String, String)>, bool)>, // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
         selected_field_idx: usize,
         scroll_offset: usize,
         is_editing: bool,
@@ -60,7 +60,7 @@ pub enum WizardState {
     EditSetup {
         remote_name: String,
         provider: String,
-        fields: Vec<(String, String, String, Vec<String>, bool)>, // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
+        fields: Vec<(String, String, String, Vec<(String, String)>, bool)>, // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
         selected_idx: usize,
         scroll_offset: usize,
         is_editing: bool,
@@ -77,7 +77,7 @@ pub enum WizardState {
     SelectOneChoice {
         provider: String,
         remote_name: String,
-        fields: Vec<(String, String, String, Vec<String>, bool)>,
+        fields: Vec<(String, String, String, Vec<(String, String)>, bool)>,
         selected_field_idx: usize,
         scroll_offset: usize,
         active_tab: usize,
@@ -85,13 +85,13 @@ pub enum WizardState {
         is_edit_mode: bool,
 
         field_name: String,
-        choices: Vec<String>,
+        choices: Vec<(String, String)>,
         choices_selected_idx: usize,
     },
     SelectMultipleChoices {
         provider: String,
         remote_name: String,
-        fields: Vec<(String, String, String, Vec<String>, bool)>,
+        fields: Vec<(String, String, String, Vec<(String, String)>, bool)>,
         selected_field_idx: usize,
         scroll_offset: usize,
         active_tab: usize,
@@ -776,7 +776,7 @@ pub fn translate_field(name: &str, desc: &str) -> (String, String) {
 
 pub fn is_field_required(
     name: &str,
-    fields: &[(String, String, String, Vec<String>, bool)],
+    fields: &[(String, String, String, Vec<(String, String)>, bool)],
     selected_idx: usize,
     is_editing: bool,
     input_buffer: &str,
@@ -859,7 +859,7 @@ fn draw_advanced_setup_wizard(
     frame: &mut Frame,
     provider: &str,
     remote_name: &str,
-    fields: &[(String, String, String, Vec<String>, bool)],
+    fields: &[(String, String, String, Vec<(String, String)>, bool)],
     selected_field_idx: usize,
     scroll_offset: usize,
     is_editing: bool,
@@ -890,7 +890,7 @@ fn draw_advanced_setup_wizard(
     let inner_area = block.inner(area);
 
     // Lọc danh sách fields theo tab
-    let filtered_fields: Vec<&(String, String, String, Vec<String>, bool)> = fields
+    let filtered_fields: Vec<&(String, String, String, Vec<(String, String)>, bool)> = fields
         .iter()
         .filter(|(name, _, _, _, required)| {
             if active_tab == 0 {
@@ -952,7 +952,8 @@ fn draw_advanced_setup_wizard(
             
             // Vẽ gợi ý các lựa chọn (choices) có sẵn ngay cạnh giá trị
             let choices_str = if !choices.is_empty() {
-                format!(" < {} >", choices.join(" | "))
+                let choice_vals: Vec<String> = choices.iter().map(|(val, _)| val.clone()).collect();
+                format!(" < {} >", choice_vals.join(" | "))
             } else {
                 String::new()
             };
@@ -1134,7 +1135,7 @@ fn draw_edit_setup_wizard(
     frame: &mut Frame,
     remote_name: &str,
     provider: &str,
-    fields: &[(String, String, String, Vec<String>, bool)], // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
+    fields: &[(String, String, String, Vec<(String, String)>, bool)], // (Tên trường, Mô tả, Giá trị, Lựa chọn, Bắt buộc)
     selected_idx: usize,
     scroll_offset: usize,
     is_editing: bool,
@@ -1167,7 +1168,7 @@ fn draw_edit_setup_wizard(
     let inner_area = block.inner(area);
 
     // Lọc danh sách fields theo tab
-    let filtered_fields: Vec<&(String, String, String, Vec<String>, bool)> = fields
+    let filtered_fields: Vec<&(String, String, String, Vec<(String, String)>, bool)> = fields
         .iter()
         .filter(|(name, _, _, _, required)| {
             if active_tab == 0 {
@@ -1229,7 +1230,8 @@ fn draw_edit_setup_wizard(
             
             // Vẽ gợi ý các lựa chọn (choices) có sẵn ngay cạnh giá trị
             let choices_str = if !choices.is_empty() {
-                format!(" < {} >", choices.join(" | "))
+                let choice_vals: Vec<String> = choices.iter().map(|(val, _)| val.clone()).collect();
+                format!(" < {} >", choice_vals.join(" | "))
             } else {
                 String::new()
             };
@@ -1643,17 +1645,17 @@ fn get_feature_description(key: &str) -> &'static str {
 pub fn draw_select_one_choice_wizard(
     frame: &mut Frame,
     field_name: &str,
-    choices: &[String],
+    choices: &[(String, String)],
     selected_idx: usize,
 ) {
     let size = frame.size();
-    let area = centered_rect(50, 45, size);
+    let area = centered_rect(70, 60, size);
     frame.render_widget(Clear, area);
 
     let items: Vec<ListItem> = choices
         .iter()
         .enumerate()
-        .map(|(i, choice)| {
+        .map(|(i, (choice_val, _))| {
             let style = if i == selected_idx {
                 Style::default()
                     .fg(Color::Black)
@@ -1662,11 +1664,7 @@ pub fn draw_select_one_choice_wizard(
             } else {
                 Style::default()
             };
-            let text = if choice == "Nhập thủ công..." {
-                format!("  ✏  {}", choice)
-            } else {
-                format!("  •  {}", choice)
-            };
+            let text = format!("  •  {}", choice_val);
             ListItem::new(text).style(style)
         })
         .collect();
@@ -1682,12 +1680,14 @@ pub fn draw_select_one_choice_wizard(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
 
-    // Split list and bottom help bar
+    // Split list, divider, detail/description, and bottom help bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),
+            Constraint::Min(3),    // Choices list
+            Constraint::Length(1), // Horizontal line divider
+            Constraint::Length(4), // Description box
+            Constraint::Length(1), // Help bar
         ])
         .split(block.inner(area));
 
@@ -1695,10 +1695,37 @@ pub fn draw_select_one_choice_wizard(
     frame.render_widget(block, area);
     frame.render_widget(list, chunks[0]);
 
+    // Horizontal divider line
+    frame.render_widget(
+        Paragraph::new("─".repeat(chunks[1].width as usize))
+            .style(Style::default().fg(Color::DarkGray)),
+        chunks[1],
+    );
+
+    // Selected choice description/note
+    let selected_desc = choices.get(selected_idx)
+        .map(|(_, desc)| desc.as_str())
+        .unwrap_or("");
+    let selected_desc_trimmed = selected_desc.trim();
+    let display_desc = if selected_desc_trimmed.is_empty() {
+        "Không có mô tả thêm cho lựa chọn này."
+    } else {
+        selected_desc_trimmed
+    };
+
+    let desc_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(" CHI TIẾT / DETAILS ", Style::default().fg(Color::DarkGray)));
+    let desc_paragraph = Paragraph::new(display_desc)
+        .block(desc_block)
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    frame.render_widget(desc_paragraph, chunks[2]);
+
     let help_line = Line::from(vec![
         Span::styled(" [Mũi tên] Di chuyển | [Enter] Chọn | [Esc] Quay lại ", Style::default().fg(Color::DarkGray)),
     ]);
-    frame.render_widget(Paragraph::new(help_line), chunks[1]);
+    frame.render_widget(Paragraph::new(help_line), chunks[3]);
 }
 
 pub fn draw_select_multiple_choices_wizard(
