@@ -16,3 +16,5 @@ webbrowser = "0.8"
 serde_yaml = "0.9"
 regex = "1"
 unicode-width = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+

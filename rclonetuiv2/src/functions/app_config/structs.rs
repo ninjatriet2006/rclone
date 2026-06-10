@@ -30,6 +30,10 @@ pub struct AppConfig {
     pub transfers_prior_fixed: Option<u64>,
     #[serde(default = "default_checkers_prior_fixed")]
     pub checkers_prior_fixed: Option<u64>,
+    #[serde(default = "default_min_multiplier")]
+    pub min_multiplier: f64,
+    #[serde(default = "default_max_multiplier")]
+    pub max_multiplier: f64,
 }
 
 fn default_language() -> String {
@@ -79,6 +83,15 @@ fn default_transfers_prior_fixed() -> Option<u64> {
 fn default_checkers_prior_fixed() -> Option<u64> {
     None
 }
+
+fn default_min_multiplier() -> f64 {
+    0.5
+}
+
+fn default_max_multiplier() -> f64 {
+    4.0
+}
+
 
 
 #[derive(Debug, Clone, PartialEq)]

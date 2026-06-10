@@ -27,59 +27,71 @@ pub mod operations;
 pub mod profile_manager;
 pub mod services_utilities;
 
+pub mod start_async_checker_and_transfer;
+
 lazy_static::lazy_static! {
     pub(crate) static ref RUNNING_SIZE_CHECKS: std::sync::Mutex<std::collections::HashSet<String>> = std::sync::Mutex::new(std::collections::HashSet::new());
+    pub(crate) static ref ACTIVE_OPS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static ref PRE_OPS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 }
 
-use crate::functions::widgets::structs::ActiveOperation;
+use crate::functions::widgets::structs::{ActiveOperation, PreOperation};
 
 pub fn save_active_operation(op: &ActiveOperation) {
-    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
-    ops.push(op.clone());
-    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-        let _ = std::fs::write(path, serialized);
-    }
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::save_active_operation(op);
 }
 
 pub fn complete_item_in_active_operation(id: &str, item_name: &str) {
-    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
-    let mut modified = false;
-    for op in &mut ops {
-        if op.id == id {
-            if let Some(pos) = op.items.iter().position(|x| x == item_name) {
-                op.items.remove(pos);
-                if op.completed_items.is_none() {
-                    op.completed_items = Some(Vec::new());
-                }
-                op.completed_items.as_mut().unwrap().push(item_name.to_string());
-                modified = true;
-            }
-            break;
-        }
-    }
-    if modified {
-        if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-            let _ = std::fs::write(path, serialized);
-        }
-    }
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::complete_item_in_active_operation(id, item_name);
+}
+
+pub fn complete_items_in_active_operation(id: &str, item_names: &[String]) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::complete_items_in_active_operation(id, item_names);
+}
+
+pub fn update_task_status_in_active_operation(id: &str, item_name: &str, status: crate::functions::TaskStatus, error: Option<String>) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::update_task_status_in_active_operation(id, item_name, status, error);
+}
+
+pub fn update_tasks_status_in_active_operation(id: &str, item_names: &[String], status: crate::functions::TaskStatus, error: Option<String>) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::update_tasks_status_in_active_operation(id, item_names, status, error);
+}
+
+pub fn append_tasks_to_active_operation(id: &str, new_tasks: &[crate::functions::FileTask]) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::append_tasks_to_active_operation(id, new_tasks);
+}
+
+pub fn prepare_active_operation_for_resume(id: &str) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::prepare_active_operation_for_resume(id);
 }
 
 pub fn remove_active_operation(id: &str) {
-    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
-    let mut ops = load_active_operations();
-    ops.retain(|o| o.id != id);
-    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
-        let _ = std::fs::write(path, serialized);
-    }
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::remove_active_operation(id);
 }
 
 pub fn load_active_operations() -> Vec<ActiveOperation> {
-    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    crate::functions::load_active_operations().unwrap_or_default()
+}
+
+pub fn clear_active_operations() {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::clear_active_operations();
+}
+
+fn load_pre_operations_unlocked() -> Vec<PreOperation> {
+    let path = crate::functions::AppConfig::config_dir().join("pre_ops.json");
     if path.exists() {
         if let Ok(content) = std::fs::read_to_string(path) {
-            if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
+            if let Ok(ops) = serde_json::from_str::<Vec<PreOperation>>(&content) {
                 return ops;
             }
         }
@@ -87,8 +99,38 @@ pub fn load_active_operations() -> Vec<ActiveOperation> {
     Vec::new()
 }
 
-pub fn clear_active_operations() {
-    let path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+pub fn load_pre_operations() -> Vec<PreOperation> {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    load_pre_operations_unlocked()
+}
+
+pub fn save_pre_operation(op: &PreOperation) {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::functions::AppConfig::config_dir().join("pre_ops.json");
+    let mut ops = load_pre_operations_unlocked();
+    if let Some(pos) = ops.iter().position(|o| o.id == op.id) {
+        ops[pos] = op.clone();
+    } else {
+        ops.push(op.clone());
+    }
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn remove_pre_operation(id: &str) {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::functions::AppConfig::config_dir().join("pre_ops.json");
+    let mut ops = load_pre_operations_unlocked();
+    ops.retain(|o| o.id != id);
+    if let Ok(serialized) = serde_json::to_string_pretty(&ops) {
+        let _ = std::fs::write(path, serialized);
+    }
+}
+
+pub fn clear_pre_operations() {
+    let _lock = PRE_OPS_LOCK.lock().unwrap();
+    let path = crate::functions::AppConfig::config_dir().join("pre_ops.json");
     let _ = std::fs::remove_file(path);
 }
 
@@ -131,9 +173,14 @@ pub enum AppEvent {
     },
     JobStatsUpdate {
         speed: f64,
+        upload_speed: f64,
+        download_speed: f64,
         transferred: u64,
         total: u64,
         active: Vec<TransferJob>,
+        active_transfers: usize,
+        active_checks: usize,
+        bottleneck_reason: String,
     },
     OAuthFinished {
         result: Result<(), String>,
@@ -276,8 +323,26 @@ pub struct App {
 // Re-export key handler helper to keep key handlers imports happy
 pub use crate::functions::keys::handle_input_key;
 
+fn migrate_old_json_data() {
+    let json_path = crate::functions::AppConfig::config_dir().join("active_ops.json");
+    if json_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&json_path) {
+            if let Ok(ops) = serde_json::from_str::<Vec<ActiveOperation>>(&content) {
+                for op in ops {
+                    let _ = crate::functions::save_active_operation(&op);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(json_path);
+    }
+}
+
 impl App {
     pub fn new() -> Self {
+        // Khởi tạo database SQLite và thực hiện migration
+        let _ = crate::functions::init_db();
+        migrate_old_json_data();
+
         // Khởi tạo và nạp ngôn ngữ
         crate::functions::init_languages();
         let config = AppConfig::load();
@@ -321,6 +386,29 @@ impl App {
                 is_copy: op.is_copy,
             });
         }
+        clear_active_operations();
+
+        let saved_pre_ops = load_pre_operations();
+        for op in saved_pre_ops {
+            let now_str = {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            };
+            monitor_state.failed_files.push(crate::functions::widgets::structs::FailedCopyItem {
+                src: op.src.clone(),
+                dest: op.dest.clone(),
+                error: "Tác vụ bị gián đoạn khi đang quét quyền/checkhash do crash / tắt đột ngột (Nhấn R để thử lại)".to_string(),
+                time: now_str,
+                is_copy: op.action_type == "copy",
+            });
+        }
+        clear_pre_operations();
 
         App {
             screen: Screen::MainMenu,
@@ -377,119 +465,182 @@ impl App {
                 // Lấy danh sách Job ID
                 let list_res = crate::functions::rpc_async("job/list".to_string(), "{}".to_string()).await;
                 
-                let mut active = Vec::new();
+                let mut active: Vec<TransferJob> = Vec::new();
                 let mut speed = 0.0;
                 let mut transferred = 0;
                 let mut total = 0;
+                let mut active_transfers = 0;
+                let mut active_checks = 0;
+                let mut upload_speed = 0.0;
+                let mut download_speed = 0.0;
 
-                if let Ok(rpc_res) = res {
-                    if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
-                        speed = val.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                        transferred = val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-                        total = val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
-
-                        if let Some(transfers) = val.get("transferring").and_then(|t| t.as_array()) {
-                            for t_val in transfers {
-                                let name = t_val
-                                    .get("name")
-                                    .and_then(|n| n.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
-                                let bytes = t_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-                                let speed_t = t_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
-                                let percentage = t_val
-                                    .get("percentage")
-                                    .and_then(|p| p.as_u64())
-                                    .unwrap_or(0) as u16;
-                                let eta = t_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
-
-                                active.push(TransferJob {
-                                    name,
-                                    size,
-                                    bytes,
-                                    speed: speed_t,
-                                    percentage,
-                                    eta,
-                                    job_id: None,
-                                    start_time: String::new(),
-                                    duration: 0.0,
-                                    group: String::new(),
-                                    description: String::new(),
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // Thêm các background jobs vào danh sách active (chỉ duyệt qua các job đang thực sự chạy)
+                let mut ids_to_check = Vec::new();
                 if let Ok(list_rpc) = list_res {
                     if let Ok(list_val) = serde_json::from_str::<Value>(&list_rpc.output) {
-                        let ids_to_check = if let Some(r_ids) = list_val.get("runningIds").and_then(|j| j.as_array()) {
+                        let ids = if let Some(r_ids) = list_val.get("runningIds").and_then(|j| j.as_array()) {
                             r_ids.clone()
                         } else if let Some(job_ids) = list_val.get("jobids").and_then(|j| j.as_array()) {
                             job_ids.clone()
                         } else {
                             Vec::new()
                         };
+                        ids_to_check = ids;
+                    }
+                }
 
-                        for id_val in ids_to_check {
-                            if let Some(id) = id_val.as_i64() {
-                                // Lấy thông tin chi tiết từng Job
-                                let status_res = crate::functions::rpc_async(
-                                    "job/status".to_string(),
-                                    serde_json::json!({ "jobid": id }).to_string(),
-                                )
-                                .await;
+                let has_running_jobs = !ids_to_check.is_empty();
 
-                                if let Ok(s_rpc) = status_res {
-                                    if let Ok(s_val) = serde_json::from_str::<Value>(&s_rpc.output) {
-                                        let finished = s_val.get("finished").and_then(|f| f.as_bool()).unwrap_or(false);
-                                        if !finished {
-                                            let description = crate::functions::get_job_description(id)
-                                                .unwrap_or_else(|| format!("Tác vụ #{}", id));
-                                            
-                                            // Lấy duration và start_time của job
-                                            let duration = s_val.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
-                                            let start_time = s_val.get("startTime").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                                            let cleaned_start = start_time.chars().take(19).collect::<String>().replace("T", " ");
+                if !has_running_jobs {
+                    // Nếu không có job chạy ngầm, sử dụng stats toàn cục của rclone
+                    if let Ok(rpc_res) = res {
+                        if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
+                            speed = val.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                            transferred = val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                            total = val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
 
-                                            // Lấy chi tiết dung lượng truyền tải từ group core/stats
-                                            let group = format!("job/{}", id);
-                                            let mut bytes = 0;
-                                            let mut speed_job = 0;
-                                            let mut percentage = 0;
-                                            let mut total_bytes = 0;
+                            if let Some(transfers) = val.get("transferring").and_then(|t| t.as_array()) {
+                                active_transfers = transfers.len();
+                                for t_val in transfers {
+                                    let name = t_val
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let size = t_val.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+                                    let bytes = t_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                    let speed_t = t_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
+                                    let percentage = t_val
+                                        .get("percentage")
+                                        .and_then(|p| p.as_u64())
+                                        .unwrap_or(0) as u16;
+                                    let eta = t_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
 
-                                            if let Ok(job_stats_res) = crate::functions::rpc_async(
-                                                "core/stats".to_string(),
-                                                serde_json::json!({ "group": group }).to_string(),
-                                            )
-                                            .await {
-                                                if let Ok(js_val) = serde_json::from_str::<Value>(&job_stats_res.output) {
-                                                    bytes = js_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
-                                                    speed_job = js_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
-                                                    total_bytes = js_val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
-                                                    if total_bytes > 0 {
-                                                        percentage = ((bytes as f64 / total_bytes as f64) * 100.0).min(99.0) as u16;
+                                    active.push(TransferJob {
+                                        name,
+                                        size,
+                                        bytes,
+                                        speed: speed_t,
+                                        percentage,
+                                        eta,
+                                        job_id: None,
+                                        start_time: String::new(),
+                                        duration: 0.0,
+                                        group: String::new(),
+                                        description: String::new(),
+                                        files: Vec::new(),
+                                    });
+                                }
+                            }
+                            if let Some(checking) = val.get("checking").and_then(|c| c.as_array()) {
+                                active_checks = checking.len();
+                            }
+                        }
+                    }
+                } else {
+                    // Nếu có job chạy ngầm, chúng ta sẽ chỉ lấy thông tin và tính tổng từ các job này
+                    for id_val in ids_to_check {
+                        if let Some(id) = id_val.as_i64() {
+                            // Lấy thông tin chi tiết từng Job
+                            let status_res = crate::functions::rpc_async(
+                                "job/status".to_string(),
+                                serde_json::json!({ "jobid": id }).to_string(),
+                            )
+                            .await;
+
+                            if let Ok(s_rpc) = status_res {
+                                if let Ok(s_val) = serde_json::from_str::<Value>(&s_rpc.output) {
+                                    let finished = s_val.get("finished").and_then(|f| f.as_bool()).unwrap_or(false);
+                                    if !finished {
+                                        let description = crate::functions::get_job_description(id)
+                                            .unwrap_or_else(|| format!("Tác vụ #{}", id));
+                                        
+                                        // Lấy duration và start_time của job
+                                        let duration = s_val.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0);
+                                        let start_time = s_val.get("startTime").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                                        let cleaned_start = start_time.chars().take(19).collect::<String>().replace("T", " ");
+
+                                        // Dự đoán hướng của Job
+                                        let mut direction = crate::functions::get_job_direction(id);
+                                        if direction.is_none() {
+                                            let desc_lower = description.to_lowercase();
+                                            if desc_lower.contains("sao chép") || desc_lower.contains("di chuyển") || desc_lower.contains("copy") || desc_lower.contains("move") {
+                                                if let Some(arrow_idx) = description.find("->") {
+                                                    let src_part = &description[..arrow_idx];
+                                                    let dest_part = &description[arrow_idx + 2..];
+                                                    let src_remote = src_part.contains(':');
+                                                    let dest_remote = dest_part.contains(':');
+                                                    if src_remote && !dest_remote {
+                                                        direction = Some(crate::functions::JobDirection::Download);
+                                                    } else if !src_remote && dest_remote {
+                                                        direction = Some(crate::functions::JobDirection::Upload);
+                                                    } else if src_remote && dest_remote {
+                                                        direction = Some(crate::functions::JobDirection::RemoteToRemote);
+                                                    } else {
+                                                        direction = Some(crate::functions::JobDirection::Local);
                                                     }
                                                 }
                                             }
-
-                                            active.push(TransferJob {
-                                                name: description,
-                                                size: total_bytes,
-                                                bytes,
-                                                speed: speed_job,
-                                                percentage,
-                                                eta: -1,
-                                                job_id: Some(id),
-                                                start_time: cleaned_start,
-                                                duration,
-                                                group,
-                                                description: String::new(),
-                                            });
                                         }
+
+                                        // Lấy chi tiết dung lượng truyền tải từ group core/stats
+                                        let group = format!("job/{}", id);
+                                        let mut bytes = 0;
+                                        let mut speed_job = 0;
+                                        let mut percentage = 0;
+                                        let mut total_bytes = 0;
+
+                                        if let Ok(job_stats_res) = crate::functions::rpc_async(
+                                            "core/stats".to_string(),
+                                            serde_json::json!({ "group": group }).to_string(),
+                                        )
+                                        .await {
+                                            if let Ok(js_val) = serde_json::from_str::<Value>(&job_stats_res.output) {
+                                                bytes = js_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                                speed_job = js_val.get("speed").and_then(|s| s.as_u64()).unwrap_or(0);
+                                                total_bytes = js_val.get("totalBytes").and_then(|t| t.as_u64()).unwrap_or(0);
+                                                if total_bytes > 0 {
+                                                    percentage = ((bytes as f64 / total_bytes as f64) * 100.0).min(99.0) as u16;
+                                                }
+
+                                                if let Some(transfers) = js_val.get("transferring").and_then(|t| t.as_array()) {
+                                                    active_transfers += transfers.len();
+                                                }
+                                                if let Some(checking) = js_val.get("checking").and_then(|c| c.as_array()) {
+                                                    active_checks += checking.len();
+                                                }
+
+                                                if let Some(dir) = direction {
+                                                    match dir {
+                                                        crate::functions::JobDirection::Upload => upload_speed += speed_job as f64,
+                                                        crate::functions::JobDirection::Download => download_speed += speed_job as f64,
+                                                        crate::functions::JobDirection::RemoteToRemote => {
+                                                            upload_speed += speed_job as f64;
+                                                            download_speed += speed_job as f64;
+                                                        }
+                                                        crate::functions::JobDirection::Local => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        speed += speed_job as f64;
+                                        transferred += bytes;
+                                        total += total_bytes;
+
+                                        active.push(TransferJob {
+                                            name: description,
+                                            size: total_bytes,
+                                            bytes,
+                                            speed: speed_job,
+                                            percentage,
+                                            eta: -1,
+                                            job_id: Some(id),
+                                            start_time: cleaned_start,
+                                            duration,
+                                            group,
+                                            description: String::new(),
+                                            files: Vec::new(),
+                                        });
                                     }
                                 }
                             }
@@ -497,11 +648,43 @@ impl App {
                     }
                 }
 
+                let mut bottleneck_reason = "Tốc độ tối ưu / Bình thường (Optimal)".to_string();
+
+                if speed > 0.0 {
+                    let config = crate::functions::app_config::AppConfig::load();
+                    let max_bw = config.max_bandwidth_bytes_per_sec as f64;
+                    
+                    if max_bw > 0.0 && speed >= max_bw * 0.90 {
+                        bottleneck_reason = "Đạt giới hạn băng thông tối đa thiết lập (Bandwidth Limit)".to_string();
+                    } else {
+                        let avg_speed_per_transfer = if active_transfers > 0 {
+                            speed / (active_transfers as f64)
+                        } else {
+                            0.0
+                        };
+
+                        if active_transfers >= 16 && avg_speed_per_transfer < 30_000.0 && speed < 1_500_000.0 {
+                            bottleneck_reason = "Bị giới hạn API Cloud (Throttling / Rate Limit - Mở quá nhiều luồng)".to_string();
+                        } else if active_transfers > 0 && active_transfers <= 3 && speed < 2_000_000.0 {
+                            bottleneck_reason = "Nghẽn do thiếu luồng cho nhiều file nhỏ (Low Threads)".to_string();
+                        }
+                    }
+                } else if has_running_jobs {
+                    bottleneck_reason = "Đang kết nối hoặc chờ phản hồi từ Cloud (Connecting / Latency)".to_string();
+                } else {
+                    bottleneck_reason = "Không có truyền tải dữ liệu (Idle)".to_string();
+                }
+
                 let _ = tx_clone.send(AppEvent::JobStatsUpdate {
                     speed,
+                    upload_speed,
+                    download_speed,
                     transferred,
                     total,
                     active,
+                    active_transfers,
+                    active_checks,
+                    bottleneck_reason,
                 });
             });
         }
@@ -901,7 +1084,7 @@ impl App {
                     Screen::FileExplorer => {
                         crate::app::file_explorer::draw_file_explorer(&mut self.explorer_state, f, main_layout[1])
                     }
-                    Screen::JobMonitor => crate::app::job_monitor::draw_job_monitor(&self.monitor_state, f, main_layout[1]),
+                    Screen::JobMonitor => crate::app::job_monitor::draw_job_monitor(&mut self.monitor_state, f, main_layout[1]),
                     Screen::ConfigProfileManager => crate::app::profile_manager::draw_profile_manager(
                         &self.profile_state,
                         f,
@@ -1053,14 +1236,24 @@ impl App {
                     }
                     AppEvent::JobStatsUpdate {
                         speed,
+                        upload_speed,
+                        download_speed,
                         transferred,
                         total,
                         active,
+                        active_transfers,
+                        active_checks,
+                        bottleneck_reason,
                     } => {
                         self.monitor_state.speed = speed;
+                        self.monitor_state.upload_speed = upload_speed;
+                        self.monitor_state.download_speed = download_speed;
                         self.monitor_state.bytes_transferred = transferred;
                         self.monitor_state.total_bytes = total;
                         self.monitor_state.active_jobs = active;
+                        self.monitor_state.active_transfers = active_transfers;
+                        self.monitor_state.active_checks = active_checks;
+                        self.monitor_state.bottleneck_reason = bottleneck_reason;
                         if self.monitor_state.selected_job_idx >= self.monitor_state.active_jobs.len() {
                             self.monitor_state.selected_job_idx = 0;
                         }

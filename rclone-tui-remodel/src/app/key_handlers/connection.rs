@@ -146,6 +146,21 @@ impl App {
                                                                             "false".to_string(),
                                                                         );
                                                                     }
+                                                                    if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
+                                                                        choices = vec![
+                                                                            "epall".to_string(),
+                                                                            "epmfs".to_string(),
+                                                                            "eplfs".to_string(),
+                                                                            "eprand".to_string(),
+                                                                            "epnewest".to_string(),
+                                                                            "ff".to_string(),
+                                                                            "mfs".to_string(),
+                                                                            "lfs".to_string(),
+                                                                            "rand".to_string(),
+                                                                            "all".to_string(),
+                                                                            "newest".to_string(),
+                                                                        ];
+                                                                    }
                                                                     if let Some(examples_arr) =
                                                                         opt_val
                                                                             .get("Examples")
@@ -505,6 +520,21 @@ impl App {
                                                         choices.push("true".to_string());
                                                         choices.push("false".to_string());
                                                     }
+                                                    if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
+                                                        choices = vec![
+                                                            "epall".to_string(),
+                                                            "epmfs".to_string(),
+                                                            "eplfs".to_string(),
+                                                            "eprand".to_string(),
+                                                            "epnewest".to_string(),
+                                                            "ff".to_string(),
+                                                            "mfs".to_string(),
+                                                            "lfs".to_string(),
+                                                            "rand".to_string(),
+                                                            "all".to_string(),
+                                                            "newest".to_string(),
+                                                        ];
+                                                    }
                                                     if let Some(examples_arr) = opt_val
                                                         .get("Examples")
                                                         .and_then(|e| e.as_array())
@@ -741,6 +771,21 @@ impl App {
                                                     if opt_type == "bool" {
                                                         choices.push("true".to_string());
                                                         choices.push("false".to_string());
+                                                    }
+                                                    if opt_name == "action_policy" || opt_name == "create_policy" || opt_name == "search_policy" {
+                                                        choices = vec![
+                                                            "epall".to_string(),
+                                                            "epmfs".to_string(),
+                                                            "eplfs".to_string(),
+                                                            "eprand".to_string(),
+                                                            "epnewest".to_string(),
+                                                            "ff".to_string(),
+                                                            "mfs".to_string(),
+                                                            "lfs".to_string(),
+                                                            "rand".to_string(),
+                                                            "all".to_string(),
+                                                            "newest".to_string(),
+                                                        ];
                                                     }
                                                     if let Some(examples_arr) = opt_val
                                                         .get("Examples")

@@ -300,8 +300,13 @@ sys_field_Install_WantedBy_desc: "Khởi chạy dịch vụ ở runlevel nào (W
 
 # Job Monitor
 mon_speed_label: "Tốc độ hiện tại: "
+mon_upload_speed_label: " | Tải lên: "
+mon_download_speed_label: " | Tải xuống: "
+mon_max_bandwidth_label: " | Băng thông tối đa: "
 mon_transferred_label: " | Đã truyền tải: "
 mon_total_pct_label: "Tiến trình tổng: "
+mon_active_transfers_label: "Số luồng truyền tải (Transfers): "
+mon_active_checkers_label: " | Số luồng kiểm tra (Checkers): "
 mon_stats_title: " TỔNG QUAN TIẾN TRÌNH "
 mon_active_title: " CÁC TÁC VỤ ĐANG TRUYỀN TẢI "
 mon_history_title: " LỊCH SỬ HOẠT ĐỘNG (LẦN GẦN NHẤT) "
@@ -604,8 +609,13 @@ sys_field_Install_WantedBy_desc: "Which runlevel to target (WantedBy)"
 
 # Job Monitor
 mon_speed_label: "Current Speed: "
+mon_upload_speed_label: " | Upload: "
+mon_download_speed_label: " | Download: "
+mon_max_bandwidth_label: " | Max Bandwidth: "
 mon_transferred_label: " | Transferred: "
 mon_total_pct_label: "Total Progress: "
+mon_active_transfers_label: "Transfers: "
+mon_active_checkers_label: " | Checkers: "
 mon_stats_title: " GLOBAL STATS "
 mon_active_title: " ACTIVE JOBS "
 mon_history_title: " ACTIVITY HISTORY (RECENT) "

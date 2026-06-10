@@ -37,6 +37,8 @@ impl Default for AppConfig {
             max_checkers: 128,
             transfers_prior_fixed: None,
             checkers_prior_fixed: None,
+            min_multiplier: 0.5,
+            max_multiplier: 4.0,
         }
     }
 }
