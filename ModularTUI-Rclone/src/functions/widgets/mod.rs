@@ -30,6 +30,7 @@ pub mod draw_headless_oauth_wizard;
 pub mod draw_advanced_setup_wizard;
 pub mod draw_edit_setup_wizard;
 pub mod draw_show_features_popup;
+pub mod draw_import_config_input_wizard;
 pub mod draw_input_profile_name;
 pub mod mod_profile_widgets_helper_fallback {
     // just a placeholder if needed
@@ -78,6 +79,7 @@ pub use draw_headless_oauth_wizard::draw_headless_oauth_wizard;
 pub use draw_advanced_setup_wizard::{draw_advanced_setup_wizard, is_basic_field};
 pub use draw_edit_setup_wizard::draw_edit_setup_wizard;
 pub use draw_show_features_popup::draw_show_features_popup;
+pub use draw_import_config_input_wizard::draw_import_config_input_wizard;
 pub use draw_input_profile_name::draw_input_profile_name;
 pub use draw_select_import_type::draw_select_import_type;
 pub use draw_input_source::draw_input_source;

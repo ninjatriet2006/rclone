@@ -105,6 +105,9 @@ pub enum WizardState {
         features: Vec<(String, bool)>,
         union_remotes_features: Option<Vec<(String, Vec<(String, bool)>)>>,
     },
+    ImportConfigInput {
+        input_buffer: String,
+    },
 }
 
 pub struct ConnectionState {

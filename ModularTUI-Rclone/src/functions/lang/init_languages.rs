@@ -111,7 +111,7 @@ menu_welcome: "Chào mừng đến với Rclone Clone TUI! Sử dụng phím Mũ
 menu_title: " MENU CHÍNH "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Thêm mới|[Alt+E]Chỉnh sửa|[Delete]Xóa kết nối|[?]Tính năng|[Mũi tên]Di chuyển|[ESC]Về Menu chính"
+conn_help_navigation: "[Insert]Thêm mới|[Alt+I]Nhập cấu hình|[Alt+E]Chỉnh sửa|[Delete]Xóa kết nối|[?]Tính năng|[Mũi tên]Di chuyển|[ESC]Về Menu chính"
 conn_title: " CLOUD REMOTES (DANH SÁCH KẾT NỐI) "
 conn_error_title: " LỖI "
 conn_info_title: " THÔNG BÁO "
@@ -420,7 +420,7 @@ menu_welcome: "Welcome to Rclone Clone TUI! Use Up/Down arrows to navigate and E
 menu_title: " MAIN MENU "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Add remote|[Alt+E]Edit|[Delete]Delete remote|[?]Features|[Arrows]Move|[ESC]Main Menu"
+conn_help_navigation: "[Insert]Add remote|[Alt+I]Import config|[Alt+E]Edit|[Delete]Delete remote|[?]Features|[Arrows]Move|[ESC]Main Menu"
 conn_title: " CLOUD REMOTES "
 conn_error_title: " ERROR "
 conn_info_title: " INFO "

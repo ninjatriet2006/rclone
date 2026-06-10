@@ -59,6 +59,11 @@ impl App {
                             }
                         }
                     }
+                    KeyCode::Char('i') | KeyCode::Char('I') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        self.connection_state.wizard = ui::connection::WizardState::ImportConfigInput {
+                            input_buffer: String::new(),
+                        };
+                    }
                     KeyCode::Char('e') | KeyCode::Char('E') if key.modifiers.contains(KeyModifiers::ALT) || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::CONTROL)) => {
                         // Chỉnh sửa kết nối
                         if !self.connection_state.remotes.is_empty() {
@@ -2277,8 +2282,172 @@ impl App {
                     _ => {}
                 }
             }
+            ui::connection::WizardState::ImportConfigInput { mut input_buffer } => {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.connection_state.wizard = ui::connection::WizardState::None;
+                    }
+                    KeyCode::Char(c) => {
+                        input_buffer.push(c);
+                        self.connection_state.wizard = ui::connection::WizardState::ImportConfigInput { input_buffer };
+                    }
+                    KeyCode::Backspace => {
+                        input_buffer.pop();
+                        self.connection_state.wizard = ui::connection::WizardState::ImportConfigInput { input_buffer };
+                    }
+                    KeyCode::Enter => {
+                        let path = input_buffer.trim().to_string();
+                        if !path.is_empty() {
+                            self.execute_import_config_tui(path, tx.clone()).await;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
+}
+
+impl App {
+    pub(crate) async fn execute_import_config_tui(
+        &mut self,
+        path: String,
+        tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
+        let path_buf = std::path::PathBuf::from(&path);
+        if !path_buf.exists() {
+            self.connection_state.error_message = Some("Tệp cấu hình không tồn tại hoặc đường dẫn không đúng.".to_string());
+            self.connection_state.wizard = ui::connection::WizardState::None;
+            return;
+        }
+
+        let content = match std::fs::read_to_string(&path_buf) {
+            Ok(c) => c,
+            Err(e) => {
+                self.connection_state.error_message = Some(format!("Không thể đọc tệp cấu hình: {}", e));
+                self.connection_state.wizard = ui::connection::WizardState::None;
+                return;
+            }
+        };
+
+        let remotes_to_import = parse_rclone_conf_tui(&content);
+        if remotes_to_import.is_empty() {
+            self.connection_state.error_message = Some("Không tìm thấy cấu hình remote hợp lệ nào trong tệp.".to_string());
+            self.connection_state.wizard = ui::connection::WizardState::None;
+            return;
+        }
+
+        let mut success_count = 0;
+        let mut imported_details = Vec::new();
+        let mut error_messages = Vec::new();
+
+        let current_remotes = self.connection_state.remotes.clone();
+
+        for (name, remote) in remotes_to_import {
+            let mut final_name = name.clone();
+            let mut counter = 1;
+            while current_remotes.contains(&final_name) || self.connection_state.remotes.contains(&final_name) {
+                final_name = format!("{}_{}", name, counter);
+                counter += 1;
+            }
+
+            let create_param = json!({
+                "name": final_name,
+                "type": remote.remote_type,
+                "parameters": Value::Object(remote.parameters),
+            }).to_string();
+
+            match rclone::rpc_async("config/create".to_string(), create_param).await {
+                Ok(res) => {
+                    if res.status == 200 {
+                        success_count += 1;
+                        if final_name != name {
+                            imported_details.push(format!("{} -> {}", name, final_name));
+                        } else {
+                            imported_details.push(final_name);
+                        }
+                    } else {
+                        let err_msg = serde_json::from_str::<Value>(&res.output)
+                            .ok()
+                            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+                            .unwrap_or_else(|| format!("Lỗi RPC {}", res.status));
+                        error_messages.push(format!("Remote '{}': {}", name, err_msg));
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!("Remote '{}': {}", name, e));
+                }
+            }
+        }
+
+        self.load_remotes(tx).await;
+
+        let mut msg = format!("Đã nhập thành công {} cấu hình remote.\n", success_count);
+        if !imported_details.is_empty() {
+            msg.push_str(&format!("Các remote đã nhập: {}\n", imported_details.join(", ")));
+        }
+        if !error_messages.is_empty() {
+            msg.push_str(&format!("\nCác lỗi xảy ra:\n{}", error_messages.join("\n")));
+            self.connection_state.error_message = Some(msg);
+        } else {
+            self.connection_state.info_message = Some(msg);
+        }
+        self.connection_state.wizard = ui::connection::WizardState::None;
+    }
+}
+
+struct RemoteConfigTui {
+    remote_type: String,
+    parameters: serde_json::Map<String, Value>,
+}
+
+fn parse_rclone_conf_tui(content: &str) -> HashMap<String, RemoteConfigTui> {
+    let mut remotes = HashMap::new();
+    let mut current_section: Option<String> = None;
+    let mut current_type: Option<String> = None;
+    let mut current_params = serde_json::Map::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            if let Some(sec_name) = current_section.take() {
+                if let Some(r_type) = current_type.take() {
+                    remotes.insert(sec_name, RemoteConfigTui {
+                        remote_type: r_type,
+                        parameters: current_params,
+                    });
+                }
+                current_params = serde_json::Map::new();
+            }
+            let sec_name = &line[1..line.len() - 1];
+            current_section = Some(sec_name.trim().to_string());
+        } else if let Some(ref _sec) = current_section {
+            if let Some(pos) = line.find('=') {
+                let key = line[..pos].trim().to_string();
+                let val = line[pos + 1..].trim().to_string();
+                if key == "type" {
+                    current_type = Some(val);
+                } else {
+                    current_params.insert(key, Value::String(val));
+                }
+            }
+        }
+    }
+
+    if let Some(sec_name) = current_section {
+        if let Some(r_type) = current_type {
+            remotes.insert(sec_name, RemoteConfigTui {
+                remote_type: r_type,
+                parameters: current_params,
+            });
+        }
+    }
+
+    remotes
 }
 
 fn try_get_filen_api_key() -> Option<String> {

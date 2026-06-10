@@ -183,6 +183,9 @@ pub fn draw_connection_manager(state: &ConnectionState, frame: &mut Frame, area:
         } => {
             draw_show_features_popup(frame, remote_name, features, union_remotes_features);
         }
+        WizardState::ImportConfigInput { input_buffer } => {
+            draw_import_config_input_wizard(frame, input_buffer);
+        }
         WizardState::None => {}
     }
 
