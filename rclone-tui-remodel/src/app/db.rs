@@ -200,68 +200,6 @@ pub fn complete_items_in_active_operation(id: &str, item_names: &[String]) -> Re
     Ok(())
 }
 
-pub fn update_task_status_in_active_operation(
-    id: &str,
-    item_name: &str,
-    status: TaskStatus,
-    error: Option<String>
-) -> Result<(), rusqlite::Error> {
-    let mut conn = get_connection()?;
-    let tx = conn.transaction()?;
-
-    let status_str = match status {
-        TaskStatus::Pending => "Pending",
-        TaskStatus::Transferring => "Transferring",
-        TaskStatus::Completed => "Completed",
-        TaskStatus::Failed => "Failed",
-        TaskStatus::Skipped => "Skipped",
-    };
-
-    tx.execute(
-        "UPDATE tasks SET status = ?1, error = ?2 WHERE op_id = ?3 AND name = ?4",
-        params![status_str, error, id, item_name],
-    )?;
-
-    if status == TaskStatus::Completed {
-        let mut op_row: Option<(String, String)> = None;
-        {
-            let mut stmt = tx.prepare("SELECT items, completed_items FROM operations WHERE id = ?1")?;
-            let mut rows = stmt.query(params![id])?;
-            if let Some(row) = rows.next()? {
-                let items: String = row.get(0)?;
-                let completed: String = row.get(1)?;
-                op_row = Some((items, completed));
-            }
-        }
-
-        if let Some((items_str, completed_str)) = op_row {
-            let mut items: Vec<String> = serde_json::from_str(&items_str).unwrap_or_default();
-            let mut completed: Vec<String> = serde_json::from_str(&completed_str).unwrap_or_default();
-
-            let mut modified = false;
-            if let Some(pos) = items.iter().position(|x| x == item_name) {
-                items.remove(pos);
-                if !completed.contains(&item_name.to_string()) {
-                    completed.push(item_name.to_string());
-                }
-                modified = true;
-            }
-
-            if modified {
-                let items_json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
-                let completed_json = serde_json::to_string(&completed).unwrap_or_else(|_| "[]".to_string());
-                tx.execute(
-                    "UPDATE operations SET items = ?1, completed_items = ?2 WHERE id = ?3",
-                    params![items_json, completed_json, id],
-                )?;
-            }
-        }
-    }
-
-    tx.commit()?;
-    Ok(())
-}
-
 pub fn update_tasks_status_in_active_operation(
     id: &str,
     item_names: &[String],
@@ -308,6 +246,74 @@ pub fn update_tasks_status_in_active_operation(
                     items.remove(pos);
                     if !completed.contains(item_name) {
                         completed.push(item_name.clone());
+                    }
+                    modified = true;
+                }
+            }
+
+            if modified {
+                let items_json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string());
+                let completed_json = serde_json::to_string(&completed).unwrap_or_else(|_| "[]".to_string());
+                tx.execute(
+                    "UPDATE operations SET items = ?1, completed_items = ?2 WHERE id = ?3",
+                    params![items_json, completed_json, id],
+                )?;
+            }
+        }
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn update_tasks_individual_status_in_active_operation(
+    id: &str,
+    updates: &[(&str, TaskStatus, Option<String>)]
+) -> Result<(), rusqlite::Error> {
+    let mut conn = get_connection()?;
+    let tx = conn.transaction()?;
+
+    let mut completed_items = Vec::new();
+
+    {
+        let mut stmt = tx.prepare("UPDATE tasks SET status = ?1, error = ?2 WHERE op_id = ?3 AND name = ?4")?;
+        for &(name, ref status, ref error) in updates {
+            let status_str = match status {
+                TaskStatus::Pending => "Pending",
+                TaskStatus::Transferring => "Transferring",
+                TaskStatus::Completed => "Completed",
+                TaskStatus::Failed => "Failed",
+                TaskStatus::Skipped => "Skipped",
+            };
+            stmt.execute(params![status_str, error, id, name])?;
+            if *status == TaskStatus::Completed {
+                completed_items.push(name.to_string());
+            }
+        }
+    }
+
+    if !completed_items.is_empty() {
+        let mut op_row: Option<(String, String)> = None;
+        {
+            let mut stmt = tx.prepare("SELECT items, completed_items FROM operations WHERE id = ?1")?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                let items: String = row.get(0)?;
+                let completed: String = row.get(1)?;
+                op_row = Some((items, completed));
+            }
+        }
+
+        if let Some((items_str, completed_str)) = op_row {
+            let mut items: Vec<String> = serde_json::from_str(&items_str).unwrap_or_default();
+            let mut completed: Vec<String> = serde_json::from_str(&completed_str).unwrap_or_default();
+
+            let mut modified = false;
+            for item_name in completed_items {
+                if let Some(pos) = items.iter().position(|x| x == &item_name) {
+                    items.remove(pos);
+                    if !completed.contains(&item_name) {
+                        completed.push(item_name);
                     }
                     modified = true;
                 }

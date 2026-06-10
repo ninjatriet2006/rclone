@@ -3260,6 +3260,15 @@ pub async fn start_async_checker_and_transfer(
         let tx_transfer = tx.clone();
         let config_path_transfer = config_path.clone();
 
+        // Calculate optimal transfer and checker threads dynamically from AppConfig
+        let mut dummy_param = serde_json::json!({
+            "dstFs": dest_transfer.clone(),
+        });
+        let max_bw = crate::app_config::AppConfig::load().max_bandwidth_bytes_per_sec;
+        let (opt_transfers, opt_checkers) = inject_optimal_thread_config(&mut dummy_param, &src_transfer, is_dir, max_bw).await;
+        let opt_transfers_str = opt_transfers.to_string();
+        let opt_checkers_str = opt_checkers.to_string();
+
         loop {
             // Read tasks from active_ops
             let ops = crate::app::load_active_operations();
@@ -3342,16 +3351,22 @@ pub async fn start_async_checker_and_transfer(
                 "--config",
                 &config_path_transfer,
                 "--transfers",
-                "4",
+                &opt_transfers_str,
                 "--checkers",
-                "4",
+                &opt_checkers_str,
                 "--use-json-log",
                 "--stats",
                 "500ms",
-                "--drive-acknowledge-abuse"
+                "--drive-acknowledge-abuse",
+                "-v"
             ]);
             cmd.stdout(std::process::Stdio::null());
             cmd.stderr(std::process::Stdio::piped());
+
+            let file_errors = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<String, String>::new()));
+            let file_errors_clone = file_errors.clone();
+            let file_successes = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::<String>::new()));
+            let file_successes_clone = file_successes.clone();
 
             let run_res = cmd.spawn();
             if let Ok(mut child) = run_res {
@@ -3381,6 +3396,28 @@ pub async fn start_async_checker_and_transfer(
                                             files: files_progress,
                                         });
                                     }
+                                } else {
+                                    let level = val.get("level").and_then(|l| l.as_str());
+                                    let object = val.get("object").and_then(|o| o.as_str());
+                                    let msg = val.get("msg").and_then(|m| m.as_str()).unwrap_or("");
+
+                                    if let Some(obj_name) = object {
+                                        let norm_obj = obj_name.replace('\\', "/").trim_start_matches('/').to_string();
+                                        if level == Some("error") {
+                                            let error_str = val.get("error")
+                                                .and_then(|e| e.as_str())
+                                                .unwrap_or(msg);
+                                            if let Ok(mut map) = file_errors_clone.lock() {
+                                                map.insert(norm_obj, error_str.to_string());
+                                            }
+                                        } else if level == Some("info") {
+                                            if msg.contains("Copied") || msg.contains("Moved") || msg.contains("Updated") || msg.contains("Skipped") {
+                                                if let Ok(mut set) = file_successes_clone.lock() {
+                                                    set.insert(norm_obj);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3394,25 +3431,41 @@ pub async fn start_async_checker_and_transfer(
 
                 let success = status.is_ok() && status.unwrap().success();
 
-                let new_status = if success {
-                    crate::app::TaskStatus::Completed
+                let errors = if let Ok(map) = file_errors.lock() {
+                    map.clone()
                 } else {
-                    crate::app::TaskStatus::Failed
+                    std::collections::HashMap::new()
                 };
-                let err_msg = if success {
-                    None
+                let successes = if let Ok(set) = file_successes.lock() {
+                    set.clone()
                 } else {
-                    Some("Transfer subprocess returned non-zero status".to_string())
+                    std::collections::HashSet::new()
                 };
 
-                crate::app::update_tasks_status_in_active_operation(&op_id_transfer, &batch_names, new_status, err_msg);
+                let mut updates = Vec::new();
+                for name in &batch_names {
+                    let norm_name = name.replace('\\', "/").trim_start_matches('/').to_string();
+                    let (new_status, err_msg) = if let Some(err) = errors.get(&norm_name) {
+                        (crate::app::TaskStatus::Failed, Some(err.clone()))
+                    } else if successes.contains(&norm_name) {
+                        (crate::app::TaskStatus::Completed, None)
+                    } else {
+                        if success {
+                            (crate::app::TaskStatus::Completed, None)
+                        } else {
+                            (crate::app::TaskStatus::Failed, Some("Transfer subprocess returned non-zero status".to_string()))
+                        }
+                    };
+                    updates.push((name.as_str(), new_status, err_msg));
+                }
+
+                crate::app::update_tasks_individual_status_in_active_operation(&op_id_transfer, &updates);
             } else {
-                crate::app::update_tasks_status_in_active_operation(
-                    &op_id_transfer,
-                    &batch_names,
-                    crate::app::TaskStatus::Failed,
-                    Some("Failed to spawn rclone CLI process".to_string()),
-                );
+                let mut updates = Vec::new();
+                for name in &batch_names {
+                    updates.push((name.as_str(), crate::app::TaskStatus::Failed, Some("Failed to spawn rclone CLI process".to_string())));
+                }
+                crate::app::update_tasks_individual_status_in_active_operation(&op_id_transfer, &updates);
             }
 
             // Cleanup temp file

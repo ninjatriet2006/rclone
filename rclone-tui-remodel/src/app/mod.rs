@@ -230,15 +230,16 @@ pub fn complete_items_in_active_operation(id: &str, item_names: &[String]) {
     let _ = db::complete_items_in_active_operation(id, item_names);
 }
 
-#[allow(dead_code)]
-pub fn update_task_status_in_active_operation(id: &str, item_name: &str, status: TaskStatus, error: Option<String>) {
-    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
-    let _ = db::update_task_status_in_active_operation(id, item_name, status, error);
-}
+
 
 pub fn update_tasks_status_in_active_operation(id: &str, item_names: &[String], status: TaskStatus, error: Option<String>) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let _ = db::update_tasks_status_in_active_operation(id, item_names, status, error);
+}
+
+pub fn update_tasks_individual_status_in_active_operation(id: &str, updates: &[(&str, TaskStatus, Option<String>)]) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = db::update_tasks_individual_status_in_active_operation(id, updates);
 }
 
 pub fn append_tasks_to_active_operation(id: &str, new_tasks: &[FileTask]) {
