@@ -517,7 +517,7 @@ pub struct App {
 
 mod services;
 mod permission;
-mod operations;
+pub(crate) mod operations;
 mod event_handlers;
 pub(crate) mod key_handlers;
 
@@ -1733,6 +1733,16 @@ pub(crate) async fn run_rpc_job_async(
         _ => serde_json::Map::new(),
     };
 
+    // Tự động tiêm cờ drive_acknowledge_abuse
+    let mut config_obj = match param_obj.remove("_config") {
+        Some(serde_json::Value::Object(o)) => o,
+        _ => serde_json::Map::new(),
+    };
+    config_obj.insert("DriveAcknowledgeAbuse".to_string(), serde_json::json!(true));
+    config_obj.insert("drive_acknowledge_abuse".to_string(), serde_json::json!(true));
+    config_obj.insert("drive-acknowledge-abuse".to_string(), serde_json::json!(true));
+    param_obj.insert("_config".to_string(), serde_json::Value::Object(config_obj));
+
     // Tự động tiêm cấu hình tối ưu số luồng cho các tác vụ truyền tải nếu chưa có
     if method == "sync/copy" || method == "sync/move" || method == "sync/sync" {
         if let Some(src_fs) = param_obj.get("srcFs").and_then(|s| s.as_str()).map(|s| s.to_string()) {
@@ -1911,6 +1921,16 @@ pub(crate) async fn run_rpc_job_async_with_progress(
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
     };
+
+    // Tự động tiêm cờ drive_acknowledge_abuse
+    let mut config_obj = match param_obj.remove("_config") {
+        Some(serde_json::Value::Object(o)) => o,
+        _ => serde_json::Map::new(),
+    };
+    config_obj.insert("DriveAcknowledgeAbuse".to_string(), serde_json::json!(true));
+    config_obj.insert("drive_acknowledge_abuse".to_string(), serde_json::json!(true));
+    config_obj.insert("drive-acknowledge-abuse".to_string(), serde_json::json!(true));
+    param_obj.insert("_config".to_string(), serde_json::Value::Object(config_obj));
 
     // Tự động tiêm cấu hình tối ưu số luồng cho các tác vụ truyền tải nếu chưa có
     if method == "sync/copy" || method == "sync/move" || method == "sync/sync" {

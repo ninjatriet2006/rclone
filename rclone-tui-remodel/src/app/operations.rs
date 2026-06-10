@@ -2679,8 +2679,22 @@ pub async fn get_directory_stats(src: &str) -> Option<(u64, u64)> {
 
 use std::sync::RwLock;
 
+#[derive(Debug, Clone)]
+pub struct FileTransferProgress {
+    pub bytes: u64,
+    pub speed: u64,
+    pub eta: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalTransferStats {
+    pub total_speed: u64,
+    pub files: std::collections::HashMap<String, FileTransferProgress>,
+}
+
 lazy_static::lazy_static! {
     pub static ref DYNAMIC_THREAD_STATE: RwLock<DynamicThreadState> = RwLock::new(DynamicThreadState::new());
+    pub static ref LOCAL_TRANSFER_STATS: std::sync::Mutex<std::collections::HashMap<String, LocalTransferStats>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
 #[derive(Debug, Clone)]
@@ -3330,12 +3344,54 @@ pub async fn start_async_checker_and_transfer(
                 "--transfers",
                 "4",
                 "--checkers",
-                "4"
+                "4",
+                "--use-json-log",
+                "--stats",
+                "500ms",
+                "--drive-acknowledge-abuse"
             ]);
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::piped());
 
             let run_res = cmd.spawn();
             if let Ok(mut child) = run_res {
+                if let Some(stderr) = child.stderr.take() {
+                    let op_id_for_stats = op_id_transfer.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::AsyncBufReadExt;
+                        let mut reader = tokio::io::BufReader::new(stderr).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                                if let Some(stats) = val.get("stats") {
+                                    let total_speed = stats.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                                    let mut files_progress = std::collections::HashMap::new();
+                                    if let Some(transferring) = stats.get("transferring").and_then(|t| t.as_array()) {
+                                        for file_val in transferring {
+                                            if let Some(name) = file_val.get("name").and_then(|n| n.as_str()) {
+                                                let bytes = file_val.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+                                                let speed = file_val.get("speed").and_then(|s| s.as_f64()).unwrap_or(0.0) as u64;
+                                                let eta = file_val.get("eta").and_then(|e| e.as_i64()).unwrap_or(-1);
+                                                files_progress.insert(name.to_string(), FileTransferProgress { bytes, speed, eta });
+                                            }
+                                        }
+                                    }
+                                    if let Ok(mut map) = LOCAL_TRANSFER_STATS.lock() {
+                                        map.insert(op_id_for_stats.clone(), LocalTransferStats {
+                                            total_speed,
+                                            files: files_progress,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
                 let status = child.wait().await;
+                if let Ok(mut map) = LOCAL_TRANSFER_STATS.lock() {
+                    map.remove(&op_id_transfer);
+                }
+
                 let success = status.is_ok() && status.unwrap().success();
 
                 let new_status = if success {

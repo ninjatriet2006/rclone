@@ -155,7 +155,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Kích hoạt Metadata toàn cục để rclone trả về Metadata.copy-requires-writer-permission cho Google Drive
     // Đồng thời thiết lập transfers và checkers ưu tiên cố định nếu được cấu hình
     let mut main_opts = serde_json::json!({
-        "Metadata": true
+        "Metadata": true,
+        "DriveAcknowledgeAbuse": true,
+        "drive_acknowledge_abuse": true,
+        "drive-acknowledge-abuse": true
     });
     if let Some(obj) = main_opts.as_object_mut() {
         if let Some(t_fixed) = config.transfers_prior_fixed {

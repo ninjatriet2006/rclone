@@ -521,6 +521,8 @@ impl App {
                 // Cộng dồn active_transfers và active_checks cho các active operations nội bộ
                 let active_ops_local = crate::app::load_active_operations();
                 let pre_ops_local = crate::app::load_pre_operations();
+                let local_stats_guard = crate::app::operations::LOCAL_TRANSFER_STATS.lock().ok();
+
                 for op in &active_ops_local {
                     let is_scanning = pre_ops_local.iter().any(|po| po.id == op.id && po.status == "scanning");
                     if is_scanning {
@@ -530,6 +532,52 @@ impl App {
                         active_transfers += transferring_count;
                         if transferring_count > 0 {
                             active_checks += 4; // giả lập 4 checkers trong quá trình copy
+                        }
+
+                        let op_stats = local_stats_guard.as_ref().and_then(|map| map.get(&op.id));
+
+                        if let Some(stats) = op_stats {
+                            let speed_op_f64 = stats.total_speed as f64;
+                            speed += speed_op_f64;
+
+                            let src_remote = op.src.contains(':');
+                            let dest_remote = op.dest.contains(':');
+                            let direction = if src_remote && !dest_remote {
+                                Some(crate::app::JobDirection::Download)
+                            } else if !src_remote && dest_remote {
+                                Some(crate::app::JobDirection::Upload)
+                            } else if src_remote && dest_remote {
+                                Some(crate::app::JobDirection::RemoteToRemote)
+                            } else {
+                                Some(crate::app::JobDirection::Local)
+                            };
+
+                            if let Some(dir) = direction {
+                                match dir {
+                                    crate::app::JobDirection::Upload => {
+                                        upload_speed += speed_op_f64;
+                                    }
+                                    crate::app::JobDirection::Download => {
+                                        download_speed += speed_op_f64;
+                                    }
+                                    crate::app::JobDirection::RemoteToRemote => {
+                                        upload_speed += speed_op_f64;
+                                        download_speed += speed_op_f64;
+                                    }
+                                    crate::app::JobDirection::Local => {}
+                                }
+                            }
+                        }
+
+                        for task in tasks {
+                            total += task.size;
+                            if task.status == crate::app::TaskStatus::Completed || task.status == crate::app::TaskStatus::Skipped {
+                                transferred += task.size;
+                            } else if task.status == crate::app::TaskStatus::Transferring {
+                                if let Some(stats) = op_stats.and_then(|os| os.files.get(&task.name)) {
+                                    transferred += stats.bytes;
+                                }
+                            }
                         }
                     }
                 }

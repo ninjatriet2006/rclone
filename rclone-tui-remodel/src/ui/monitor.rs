@@ -220,6 +220,19 @@ impl TempTreeNode {
 
         let is_all_completed = total_children > 0 && completed_children == total_children;
         
+        // Cập nhật status của thư mục cha dựa trên các con
+        if is_all_completed {
+            self.status = "completed".to_string();
+        } else if self.children.values().any(|c| c.status == "running") {
+            self.status = "running".to_string();
+        } else if self.children.values().any(|c| c.status == "checking") {
+            self.status = "checking".to_string();
+        } else if self.children.values().any(|c| c.status == "failed") {
+            self.status = "failed".to_string();
+        } else {
+            self.status = "queued".to_string();
+        }
+
         self.size = total_size;
         self.bytes = total_bytes;
         self.percentage = if total_size > 0 {
@@ -482,17 +495,31 @@ impl MonitorState {
         // 2. Hiển thị từng tác vụ hoạt động từ active_ops như một thư mục tiến trình
         let active_ops = crate::app::load_active_operations();
         let pre_ops = crate::app::load_pre_operations();
+        let local_stats_guard = crate::app::operations::LOCAL_TRANSFER_STATS.lock().ok();
         for op in &active_ops {
             let is_scanning = pre_ops.iter().any(|po| po.id == op.id && po.status == "scanning");
             let op_folder_id = format!("op/{}", op.id);
             let op_expanded = self.expanded_paths.contains(&op_folder_id);
+            
+            let op_stats = local_stats_guard.as_ref().and_then(|map| map.get(&op.id));
+            
+            let pre_op = pre_ops.iter().find(|po| po.id == op.id);
+            let scan_info = if let Some(po) = pre_op {
+                format!(" (Đã quét: {} tệp)", po.scanned_count)
+            } else {
+                String::new()
+            };
+
             let task_name = if is_scanning {
-                let trans_checking = crate::lang::translate("mon_action_checking");
-                if trans_checking != "mon_action_checking" {
-                    trans_checking
+                let check_str = crate::lang::translate("mon_action_checking");
+                let action_name = if op.action_type == "copy" {
+                    "Sao chép".to_string()
+                } else if op.action_type == "move" {
+                    "Di chuyển".to_string()
                 } else {
-                    "Kiểm tra".to_string()
-                }
+                    "Xóa".to_string()
+                };
+                format!("{} & {}", check_str, action_name)
             } else if op.action_type == "copy" {
                 "Sao chép".to_string()
             } else if op.action_type == "move" {
@@ -503,91 +530,144 @@ impl MonitorState {
 
             let mut root = TempTreeNode::new(String::new(), true, String::new());
             
-            let task_map = op.tasks.as_ref().map(|tasks| {
-                tasks.iter()
-                    .map(|t| (t.name.as_str(), t))
-                    .collect::<std::collections::HashMap<&str, &crate::app::FileTask>>()
-            });
-
-            let completed_iter = op.completed_items.as_ref()
-                .map(|v| v.iter().map(|item| (item, true)))
-                .into_iter()
-                .flatten();
-            let queued_iter = op.items.iter().map(|item| (item, false));
-            
-            for (item, is_completed) in completed_iter.chain(queued_iter) {
-                let size = task_map.as_ref()
-                    .and_then(|map| map.get(item.as_str()))
-                    .map(|t| t.size)
-                    .unwrap_or(0);
-
-                let mut status = if is_completed {
-                    "completed".to_string()
-                } else if is_scanning {
-                    "checking".to_string()
-                } else if running_paths.contains(item) {
-                    "running".to_string()
-                } else {
-                    "queued".to_string()
-                };
-                let mut error = String::new();
-                let mut bytes = 0;
-
-                if let Some(ref map) = task_map {
-                    if let Some(task) = map.get(item.as_str()) {
-                        status = match task.status {
-                            crate::app::TaskStatus::Pending => {
-                                if is_scanning {
-                                    "checking".to_string()
-                                } else {
-                                    "queued".to_string()
-                                }
+            if let Some(ref tasks) = op.tasks {
+                for task in tasks {
+                    let status = match task.status {
+                        crate::app::TaskStatus::Pending => {
+                            if is_scanning {
+                                "checking".to_string()
+                            } else {
+                                "queued".to_string()
                             }
-                            crate::app::TaskStatus::Transferring => "running".to_string(),
-                            crate::app::TaskStatus::Completed => "completed".to_string(),
-                            crate::app::TaskStatus::Failed => "failed".to_string(),
-                            crate::app::TaskStatus::Skipped => "skipped".to_string(),
-                        };
-                        if status == "completed" || status == "skipped" {
-                            bytes = size;
                         }
-                        if let Some(ref err) = task.error {
-                            error = err.clone();
+                        crate::app::TaskStatus::Transferring => "running".to_string(),
+                        crate::app::TaskStatus::Completed => "completed".to_string(),
+                        crate::app::TaskStatus::Failed => "failed".to_string(),
+                        crate::app::TaskStatus::Skipped => "skipped".to_string(),
+                    };
+                    let mut bytes = 0;
+                    let mut file_speed = 0;
+                    let mut file_eta = -1;
+
+                    if status == "completed" || status == "skipped" {
+                        bytes = task.size;
+                    } else if status == "running" {
+                        if let Some(stats) = op_stats.and_then(|os| os.files.get(&task.name)) {
+                            bytes = stats.bytes;
+                            file_speed = stats.speed;
+                            file_eta = stats.eta;
                         }
                     }
-                } else if is_completed {
-                    status = "completed".to_string();
-                    bytes = size;
+
+                    let percentage = if task.size > 0 {
+                        ((bytes as f64 / task.size as f64) * 100.0) as u16
+                    } else if status == "completed" || status == "skipped" {
+                        100
+                    } else {
+                        0
+                    };
+
+                    let job_file = JobFile {
+                        path: task.name.clone(),
+                        size: task.size,
+                        bytes,
+                        speed: file_speed,
+                        percentage,
+                        eta: file_eta,
+                        status,
+                        error: task.error.clone().unwrap_or_default(),
+                    };
+
+                    let parts: Vec<&str> = task.name.split('/').filter(|s| !s.is_empty()).collect();
+                    root.insert(&parts, &job_file);
                 }
+            } else {
+                let task_map = op.tasks.as_ref().map(|tasks| {
+                    tasks.iter()
+                        .map(|t| (t.name.as_str(), t))
+                        .collect::<std::collections::HashMap<&str, &crate::app::FileTask>>()
+                });
 
-                let percentage = if size > 0 {
-                    ((bytes as f64 / size as f64) * 100.0) as u16
-                } else if is_completed || status == "completed" || status == "skipped" {
-                    100
-                } else {
-                    0
-                };
+                let completed_iter = op.completed_items.as_ref()
+                    .map(|v| v.iter().map(|item| (item, true)))
+                    .into_iter()
+                    .flatten();
+                let queued_iter = op.items.iter().map(|item| (item, false));
+                
+                for (item, is_completed) in completed_iter.chain(queued_iter) {
+                    let size = task_map.as_ref()
+                        .and_then(|map| map.get(item.as_str()))
+                        .map(|t| t.size)
+                        .unwrap_or(0);
 
-                let job_file = JobFile {
-                    path: item.to_string(),
-                    size,
-                    bytes,
-                    speed: 0,
-                    percentage,
-                    eta: -1,
-                    status,
-                    error,
-                };
+                    let mut status = if is_completed {
+                        "completed".to_string()
+                    } else if is_scanning {
+                        "checking".to_string()
+                    } else if running_paths.contains(item) {
+                        "running".to_string()
+                    } else {
+                        "queued".to_string()
+                    };
+                    let mut error = String::new();
+                    let mut bytes = 0;
 
-                let parts: Vec<&str> = item.split('/').filter(|s| !s.is_empty()).collect();
-                root.insert(&parts, &job_file);
+                    if let Some(ref map) = task_map {
+                        if let Some(task) = map.get(item.as_str()) {
+                            status = match task.status {
+                                crate::app::TaskStatus::Pending => {
+                                    if is_scanning {
+                                        "checking".to_string()
+                                    } else {
+                                        "queued".to_string()
+                                    }
+                                }
+                                crate::app::TaskStatus::Transferring => "running".to_string(),
+                                crate::app::TaskStatus::Completed => "completed".to_string(),
+                                crate::app::TaskStatus::Failed => "failed".to_string(),
+                                crate::app::TaskStatus::Skipped => "skipped".to_string(),
+                            };
+                            if status == "completed" || status == "skipped" {
+                                bytes = size;
+                            }
+                            if let Some(ref err) = task.error {
+                                error = err.clone();
+                            }
+                        }
+                    } else if is_completed {
+                        status = "completed".to_string();
+                        bytes = size;
+                    }
+
+                    let percentage = if size > 0 {
+                        ((bytes as f64 / size as f64) * 100.0) as u16
+                    } else if is_completed || status == "completed" || status == "skipped" {
+                        100
+                    } else {
+                        0
+                    };
+
+                    let job_file = JobFile {
+                        path: item.to_string(),
+                        size,
+                        bytes,
+                        speed: 0,
+                        percentage,
+                        eta: -1,
+                        status,
+                        error,
+                    };
+
+                    let parts: Vec<&str> = item.split('/').filter(|s| !s.is_empty()).collect();
+                    root.insert(&parts, &job_file);
+                }
             }
 
             root.aggregate_totals();
 
             let op_node = VisibleNode {
                 id: op_folder_id.clone(),
-                name: format!("{} - {}", op.id, task_name),
+                name: format!("{} - {}{}", op.id, task_name, scan_info),
                 is_dir: true,
                 is_job: false,
                 depth: 0,
@@ -595,7 +675,7 @@ impl MonitorState {
                 status: if is_scanning { "checking".to_string() } else { String::new() },
                 size: root.recursive_total_size,
                 bytes: root.recursive_completed_bytes,
-                speed: 0,
+                speed: op_stats.map(|os| os.total_speed).unwrap_or(0),
                 eta: -1,
                 percentage: root.percentage,
                 job_id: None,
@@ -1111,16 +1191,35 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     let mut spans = vec![
                         Span::raw(indent),
                         Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
-                        Span::styled("📁 ", Style::default().fg(Color::Cyan)),
-                        Span::styled(
-                            format!("{} ", node.name),
-                            if is_op_checking {
-                                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                            } else {
-                                Style::default().add_modifier(Modifier::BOLD)
-                            },
-                        ),
                     ];
+
+                    if node.id.contains(':') {
+                        // Thư mục con của tác vụ
+                        let icon = match node.status.as_str() {
+                            "completed" => ("🟢 ", Color::Green),
+                            "running" => ("⏳ ", Color::Yellow),
+                            "checking" => ("🔍 ", Color::Cyan),
+                            "failed" => ("🔴 ", Color::Red),
+                            "queued" => ("🕒 ", Color::DarkGray),
+                            _ => ("📁 ", Color::Cyan),
+                        };
+                        spans.push(Span::styled(icon.0, Style::default().fg(icon.1)));
+                        if icon.0 != "📁 " {
+                            spans.push(Span::styled("📁 ", Style::default().fg(Color::Cyan)));
+                        }
+                    } else {
+                        // Thư mục gốc tác vụ
+                        spans.push(Span::styled("📁 ", Style::default().fg(Color::Cyan)));
+                    }
+
+                    spans.push(Span::styled(
+                        format!("{} ", node.name),
+                        if is_op_checking {
+                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        },
+                    ));
                     
                     if node.direct_total_children > 0 {
                         let bar_color = if is_op_checking { Color::Cyan } else { Color::Yellow };
@@ -1148,6 +1247,14 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
+
+                    if node.speed > 0 {
+                        spans.push(Span::styled(
+                            format!("{}/s", super::format_size(node.speed)),
+                            Style::default().fg(Color::Yellow),
+                        ));
+                    }
+
                     Line::from(spans)
                 } else {
                     let mut spans = vec![
@@ -1214,8 +1321,15 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                 ];
 
                 if node.status == "failed" {
+                    let truncated_err = if node.error.chars().count() > 50 {
+                        let mut temp: String = node.error.chars().take(50).collect();
+                        temp.push_str("...");
+                        temp
+                    } else {
+                        node.error.clone()
+                    };
                     spans.push(Span::styled(
-                        format!(" (Lỗi: {})", node.error),
+                        format!(" (Lỗi: {})", truncated_err),
                         Style::default().fg(Color::Red),
                     ));
                 } else if node.status == "running" {
@@ -1417,11 +1531,18 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
+                let truncated_err = if item.error.chars().count() > 60 {
+                    let mut temp: String = item.error.chars().take(60).collect();
+                    temp.push_str("...");
+                    temp
+                } else {
+                    item.error.clone()
+                };
                 let line = Line::from(vec![
                     Span::styled("❌ ", Style::default().fg(Color::Red)),
                     Span::styled(format!("[{}] ", item.time), time_style),
                     Span::styled(format!("{} ", item.src), text_style),
-                    Span::styled(format!("(Lỗi: {})", item.error), err_style),
+                    Span::styled(format!("(Lỗi: {})", truncated_err), err_style),
                 ]);
                 ListItem::new(line)
             })
@@ -1452,73 +1573,203 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let details_text = if state.active_jobs.is_empty() {
-        vec![Line::from(vec![
-            Span::styled("[DEBUG] Không có tác vụ rclone nào đang chạy.", Style::default().fg(Color::Black)),
-        ])]
-    } else {
-        let selected_job = if state.selected_node_idx < state.visible_nodes.len() {
-            let node = &state.visible_nodes[state.selected_node_idx];
-            state.active_jobs.iter().find(|j| j.job_id == node.job_id)
-        } else {
-            None
-        }.or_else(|| state.active_jobs.first());
-
-        if let Some(job) = selected_job {
-            let mut lines = Vec::new();
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(
-                        "[DEBUG] Tác vụ: {} | Job ID: {}",
-                        job.name,
-                        job.job_id
-                            .map(|id| id.to_string())
-                            .unwrap_or_else(|| "Không có".to_string())
-                    ),
-                    Style::default().fg(Color::Black),
-                ),
-            ]));
-
-            if job.job_id.is_some() {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "[DEBUG] Nhóm thống kê: {} | Bắt đầu: {} | Đã chạy: {:.1}s",
-                            job.group, job.start_time, job.duration
+    let details_text = match state.active_pane {
+        MonitorPane::FailedFiles => {
+            if !state.failed_files.is_empty() && state.selected_failed_idx < state.failed_files.len() {
+                let item = &state.failed_files[state.selected_failed_idx];
+                vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[LỖI TỆP TIN] Thời gian: {} | Nguồn: {}", item.time, item.src),
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                         ),
-                        Style::default().fg(Color::Black),
-                    ),
-                ]));
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[ĐÍCH]: {}", item.dest),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[LỖI CHI TIẾT]: {}", item.error),
+                            Style::default().fg(Color::Red),
+                        ),
+                    ]),
+                ]
+            } else {
+                vec![Line::from(vec![
+                    Span::styled("[DEBUG] Không có tệp tin lỗi nào được chọn.", Style::default().fg(Color::Gray)),
+                ])]
             }
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(
-                        "[DEBUG] Tiến độ: {}% | Tốc độ: {}/s | Truyền tải: {} / {}",
-                        job.percentage,
-                        super::format_size(job.speed),
-                        super::format_size(job.bytes),
-                        super::format_size(job.size)
-                    ),
-                    Style::default().fg(Color::Black),
-                ),
-            ]));
-
-            if !job.description.is_empty() {
-                lines.push(Line::from(vec![
+        }
+        MonitorPane::PendingJobs => {
+            if !state.pending_jobs.is_empty() && state.selected_pending_idx < state.pending_jobs.len() {
+                let job = &state.pending_jobs[state.selected_pending_idx];
+                vec![
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[TÁC VỤ CHỜ] Nguồn: {}", job.src),
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[ĐÍCH]: {}", job.dest),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(
+                            format!(
+                                "[TRẠNG THÁI]: {} | Bị chặn: {}/{} tệp",
+                                job.status,
+                                job.restricted_files.len(),
+                                job.total_files
+                            ),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                    ]),
+                ]
+            } else {
+                vec![Line::from(vec![
+                    Span::styled("[DEBUG] Không có tác vụ chờ nào được chọn.", Style::default().fg(Color::Gray)),
+                ])]
+            }
+        }
+        MonitorPane::ActiveJobs => {
+            if state.active_jobs.is_empty() {
+                vec![Line::from(vec![
                     Span::styled(
-                        format!("[DEBUG] Lệnh/Mô tả đầy đủ: {}", job.description),
-                        Style::default().fg(Color::Black),
+                        "[DEBUG] Không có tác vụ rclone nào đang chạy.",
+                        Style::default().fg(Color::Gray),
                     ),
-                ]));
-            }
+                ])]
+            } else {
+                let selected_node = if state.selected_node_idx < state.visible_nodes.len() {
+                    Some(&state.visible_nodes[state.selected_node_idx])
+                } else {
+                    None
+                };
 
-            lines
-        } else {
-            vec![Line::from(vec![
-                Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Black)),
-            ])]
+                if let Some(node) = selected_node {
+                    if !node.error.is_empty() {
+                        vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("[LỖI TỆP TIN] Tên: {}", node.name),
+                                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("[LỖI CHI TIẾT]: {}", node.error),
+                                    Style::default().fg(Color::Red),
+                                ),
+                            ]),
+                        ]
+                    } else if !node.is_dir && !node.is_job {
+                        let eta_str = if node.eta >= 0 {
+                            format!("ETA: {}s", node.eta)
+                        } else {
+                            "ETA: --".to_string()
+                        };
+                        let size_str = super::format_size(node.size);
+                        let bytes_str = super::format_size(node.bytes);
+                        let speed_str = format!("{}/s", super::format_size(node.speed));
+                        
+                        let mut lines = vec![
+                            Line::from(vec![
+                                Span::styled(
+                                    format!("[CHI TIẾT TỆP TIN] Tên: {}", node.name),
+                                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::styled(
+                                    format!(
+                                        "[TRẠNG THÁI]: {} | Tiến độ: {}% ({} / {})",
+                                        node.status, node.percentage, bytes_str, size_str
+                                    ),
+                                    Style::default().fg(Color::White),
+                                ),
+                            ]),
+                        ];
+                        if node.status == "running" {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    format!("[TỐC ĐỘ]: {} | {}", speed_str, eta_str),
+                                    Style::default().fg(Color::Yellow),
+                                ),
+                            ]));
+                        }
+                        lines
+                    } else {
+                        let selected_job = state.active_jobs.iter().find(|j| j.job_id == node.job_id)
+                            .or_else(|| state.active_jobs.first());
+
+                        if let Some(job) = selected_job {
+                            let mut lines = Vec::new();
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    format!(
+                                        "[TÁC VỤ] Tên: {} | Job ID: {}",
+                                        job.name,
+                                        job.job_id
+                                            .map(|id| id.to_string())
+                                            .unwrap_or_else(|| "Không có".to_string())
+                                    ),
+                                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                                ),
+                            ]));
+
+                            if job.job_id.is_some() {
+                                lines.push(Line::from(vec![
+                                    Span::styled(
+                                        format!(
+                                            "[CHI TIẾT]: Nhóm: {} | Bắt đầu: {} | Đã chạy: {:.1}s",
+                                            job.group, job.start_time, job.duration
+                                        ),
+                                        Style::default().fg(Color::White),
+                                    ),
+                                ]));
+                            }
+
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    format!(
+                                        "[TIẾN ĐỘ]: {}% | Tốc độ: {}/s | Đã chuyển: {} / {}",
+                                        job.percentage,
+                                        super::format_size(job.speed),
+                                        super::format_size(job.bytes),
+                                        super::format_size(job.size)
+                                    ),
+                                    Style::default().fg(Color::Yellow),
+                                ),
+                            ]));
+
+                            if !job.description.is_empty() {
+                                lines.push(Line::from(vec![
+                                    Span::styled(
+                                        format!("[LỆNH]: {}", job.description),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
+                                ]));
+                            }
+
+                            lines
+                        } else {
+                            vec![Line::from(vec![
+                                Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Gray)),
+                            ])]
+                        }
+                    }
+                } else {
+                    vec![Line::from(vec![
+                        Span::styled("[DEBUG] Vui lòng chọn một tác vụ phía trên.", Style::default().fg(Color::Gray)),
+                    ])]
+                }
+            }
         }
     };
 
