@@ -1698,6 +1698,101 @@ impl App {
                     }
                 }
             }
+            9 => {
+                let pane_type = self.explorer_state.active_pane.clone();
+                {
+                    let pane = match pane_type {
+                        ui::explorer::ActivePane::Left => &mut self.explorer_state.left_pane,
+                        ui::explorer::ActivePane::Right => &mut self.explorer_state.right_pane,
+                    };
+                    pane.remote = format!("{},trashed_only=true:", pane.remote.trim_end_matches(':'));
+                    pane.path = String::new();
+                    pane.selected_names.clear();
+                    pane.selected_idx = 0;
+                    pane.scroll_offset = 0;
+                }
+                self.refresh_explorer_pane(pane_type, tx.clone()).await;
+            }
+            11 => {
+                let mut selected_items = Vec::new();
+                let pane = match self.explorer_state.active_pane {
+                    ui::explorer::ActivePane::Left => &self.explorer_state.left_pane,
+                    ui::explorer::ActivePane::Right => &self.explorer_state.right_pane,
+                };
+                for item in &pane.items {
+                    if item.name != ".." && pane.selected_names.contains(&item.name) {
+                        let rel_path = if pane.path.is_empty() {
+                            item.name.clone()
+                        } else {
+                            format!("{}/{}", pane.path.trim_start_matches('/'), item.name)
+                        };
+                        selected_items.push(rel_path);
+                    }
+                }
+                if selected_items.is_empty() {
+                    if let Some(item) = selected_item {
+                        if item.name != ".." {
+                            let rel_path = if pane.path.is_empty() {
+                                item.name.clone()
+                            } else {
+                                format!("{}/{}", pane.path.trim_start_matches('/'), item.name)
+                            };
+                            selected_items.push(rel_path);
+                        }
+                    }
+                }
+                
+                if !selected_items.is_empty() {
+                    let base_remote = if let Some(idx) = pane.remote.find(",trashed_only=true") {
+                        format!("{}:", &pane.remote[..idx])
+                    } else {
+                        pane.remote.clone()
+                    };
+                    
+                    self.explorer_state.popup = ui::explorer::ExplorerPopup::SpecialActionMessage {
+                        title: "Khôi phục mục đã chọn".to_string(),
+                        message: "Đang khôi phục...".to_string(),
+                    };
+                    
+                    let tx_clone = tx.clone();
+                    let pane_type = self.explorer_state.active_pane.clone();
+                    tokio::spawn(async move {
+                        let param = json!({
+                            "command": "untrash",
+                            "fs": base_remote,
+                            "arg": selected_items,
+                        }).to_string();
+                        let res = rclone::rpc_async("backend/command".to_string(), param).await;
+                        let result = match res {
+                            Ok(rpc_res) if rpc_res.status == 200 => Ok(()),
+                            Ok(rpc_res) => Err(format!("Lỗi RPC: {}", rpc_res.output)),
+                            Err(e) => Err(e),
+                        };
+                        let _ = tx_clone.send(AppEvent::ExplorerOperationFinished {
+                            pane: pane_type,
+                            op_name: "Khôi phục từ thùng rác (untrash)".to_string(),
+                            result,
+                        });
+                    });
+                }
+            }
+            12 => {
+                let pane_type = self.explorer_state.active_pane.clone();
+                {
+                    let pane = match pane_type {
+                        ui::explorer::ActivePane::Left => &mut self.explorer_state.left_pane,
+                        ui::explorer::ActivePane::Right => &mut self.explorer_state.right_pane,
+                    };
+                    if let Some(idx) = pane.remote.find(",trashed_only=true") {
+                        pane.remote = format!("{}:", &pane.remote[..idx]);
+                    }
+                    pane.path = String::new();
+                    pane.selected_names.clear();
+                    pane.selected_idx = 0;
+                    pane.scroll_offset = 0;
+                }
+                self.refresh_explorer_pane(pane_type, tx.clone()).await;
+            }
             _ => {}
         }
     }

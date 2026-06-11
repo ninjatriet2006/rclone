@@ -511,7 +511,9 @@ pub fn draw(state: &mut ExplorerState, frame: &mut Frame, area: Rect) {
             draw_input_rename(frame, old_name, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::SpecialActionsMenu { selected_idx } => {
-            draw_special_actions_menu(frame, *selected_idx);
+            let active_pane = if state.active_pane == ActivePane::Left { &state.left_pane } else { &state.right_pane };
+            let is_trash_view = active_pane.remote.contains(",trashed_only=true");
+            draw_special_actions_menu(frame, *selected_idx, is_trash_view);
         }
         ExplorerPopup::ViewFile { file_name, content, scroll_offset } => {
             draw_view_file(frame, file_name, content, *scroll_offset);
@@ -1035,23 +1037,32 @@ fn draw_input_rename(frame: &mut Frame, old_name: &str, input_buffer: &str, curs
     frame.render_widget(paragraph, area);
 }
 
-fn draw_special_actions_menu(frame: &mut Frame, selected_idx: usize) {
+fn draw_special_actions_menu(frame: &mut Frame, selected_idx: usize, is_trash_view: bool) {
     let size = frame.size();
     let area = centered_rect(50, 50, size);
     frame.render_widget(Clear, area);
 
-    let options = vec![
-        crate::lang::translate("exp_special_link"),
-        crate::lang::translate("exp_special_hash"),
-        crate::lang::translate("exp_special_cleanup"),
-        crate::lang::translate("exp_special_rmdir"),
-        crate::lang::translate("exp_special_rmdirs"),
-        crate::lang::translate("exp_special_cryptdecode"),
-        crate::lang::translate("exp_special_archive"),
-        crate::lang::translate("exp_special_dedupe"),
-        crate::lang::translate("exp_special_merge_similar"),
-        crate::lang::translate("exp_special_close"),
-    ];
+    let options = if is_trash_view {
+        vec![
+            crate::lang::translate("exp_special_trash_untrash"),
+            crate::lang::translate("exp_special_trash_exit"),
+            crate::lang::translate("exp_special_close"),
+        ]
+    } else {
+        vec![
+            crate::lang::translate("exp_special_link"),
+            crate::lang::translate("exp_special_hash"),
+            crate::lang::translate("exp_special_cleanup"),
+            crate::lang::translate("exp_special_rmdir"),
+            crate::lang::translate("exp_special_rmdirs"),
+            crate::lang::translate("exp_special_cryptdecode"),
+            crate::lang::translate("exp_special_archive"),
+            crate::lang::translate("exp_special_dedupe"),
+            crate::lang::translate("exp_special_merge_similar"),
+            crate::lang::translate("exp_special_trash_view"),
+            crate::lang::translate("exp_special_close"),
+        ]
+    };
 
     let items: Vec<ListItem> = options
         .iter()

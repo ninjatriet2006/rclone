@@ -6,23 +6,32 @@ use ratatui::{
 };
 use crate::functions::*;
 
-pub fn draw_special_actions_popup(frame: &mut Frame, selected_idx: usize) {
+pub fn draw_special_actions_popup(frame: &mut Frame, selected_idx: usize, is_trash_view: bool) {
     let size = frame.size();
     let area = centered_rect(50, 50, size);
     frame.render_widget(Clear, area);
 
-    let options = vec![
-        translate("exp_special_link"),
-        translate("exp_special_hash"),
-        translate("exp_special_cleanup"),
-        translate("exp_special_rmdir"),
-        translate("exp_special_rmdirs"),
-        translate("exp_special_cryptdecode"),
-        translate("exp_special_archive"),
-        translate("exp_special_dedupe"),
-        translate("exp_special_merge_similar"),
-        translate("exp_special_close"),
-    ];
+    let options = if is_trash_view {
+        vec![
+            translate("exp_special_trash_untrash"),
+            translate("exp_special_trash_exit"),
+            translate("exp_special_close"),
+        ]
+    } else {
+        vec![
+            translate("exp_special_link"),
+            translate("exp_special_hash"),
+            translate("exp_special_cleanup"),
+            translate("exp_special_rmdir"),
+            translate("exp_special_rmdirs"),
+            translate("exp_special_cryptdecode"),
+            translate("exp_special_archive"),
+            translate("exp_special_dedupe"),
+            translate("exp_special_merge_similar"),
+            translate("exp_special_trash_view"),
+            translate("exp_special_close"),
+        ]
+    };
 
     let items: Vec<ListItem> = options
         .iter()

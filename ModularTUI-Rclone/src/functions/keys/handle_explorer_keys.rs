@@ -368,24 +368,33 @@ pub async fn handle_explorer_keys(
                     }
                 }
                 ExplorerPopup::SpecialActionsMenu { mut selected_idx } => {
+                    let active_pane = if app.explorer_state.active_pane == ActivePane::Left { &app.explorer_state.left_pane } else { &app.explorer_state.right_pane };
+                    let is_trash_view = active_pane.remote.contains(",trashed_only=true");
+                    let num_options = if is_trash_view { 3 } else { 11 };
                     match key.code {
                         KeyCode::Esc => {
                             app.explorer_state.popup = ExplorerPopup::None;
                         }
                         KeyCode::Up => {
-                            selected_idx = if selected_idx == 0 { 9 } else { selected_idx - 1 };
+                            selected_idx = if selected_idx == 0 { num_options - 1 } else { selected_idx - 1 };
                             app.explorer_state.popup = ExplorerPopup::SpecialActionsMenu { selected_idx };
                         }
                         KeyCode::Down => {
-                            selected_idx = (selected_idx + 1) % 10;
+                            selected_idx = (selected_idx + 1) % num_options;
                             app.explorer_state.popup = ExplorerPopup::SpecialActionsMenu { selected_idx };
                         }
                         KeyCode::Enter => {
-                            if selected_idx == 9 {
-                                app.explorer_state.popup = ExplorerPopup::None;
+                            app.explorer_state.popup = ExplorerPopup::None;
+                            if is_trash_view {
+                                if selected_idx == 0 {
+                                    app.handle_special_action_selected(11, tx.clone()).await; // Untrash
+                                } else if selected_idx == 1 {
+                                    app.handle_special_action_selected(12, tx.clone()).await; // Exit trash
+                                }
                             } else {
-                                app.explorer_state.popup = ExplorerPopup::None;
-                                app.handle_special_action_selected(selected_idx, tx.clone()).await;
+                                if selected_idx < 10 {
+                                    app.handle_special_action_selected(selected_idx, tx.clone()).await;
+                                }
                             }
                         }
                         _ => {}

@@ -173,7 +173,9 @@ pub fn draw_file_explorer(state: &mut ExplorerState, frame: &mut Frame, area: Re
             draw_input_rename_popup(frame, old_name, input_buffer, state.edit_cursor_idx);
         }
         ExplorerPopup::SpecialActionsMenu { selected_idx } => {
-            draw_special_actions_popup(frame, *selected_idx);
+            let active_pane = if state.active_pane == ActivePane::Left { &state.left_pane } else { &state.right_pane };
+            let is_trash_view = active_pane.remote.contains(",trashed_only=true");
+            draw_special_actions_popup(frame, *selected_idx, is_trash_view);
         }
         ExplorerPopup::ViewFile { file_name, content, scroll_offset } => {
             draw_file_view_popup(frame, file_name, content, *scroll_offset);

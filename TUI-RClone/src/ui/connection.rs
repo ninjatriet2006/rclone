@@ -147,7 +147,13 @@ impl ConnectionState {
     }
 }
 
-pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect, filen_cli_installed: bool) {
+pub fn draw(
+    state: &ConnectionState,
+    frame: &mut Frame,
+    area: Rect,
+    filen_cli_installed: bool,
+    remote_types: &std::collections::HashMap<String, String>,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -175,7 +181,8 @@ pub fn draw(state: &ConnectionState, frame: &mut Frame, area: Rect, filen_cli_in
                 .get(remote)
                 .cloned()
                 .unwrap_or_else(|| crate::lang::translate("status_unchecked"));
-            let text = format!("  [Cloud] -> {:<25} | {}", remote, status);
+            let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
+            let text = format!("  [{}] -> {:<25} | {}", r_type, remote, status);
             ListItem::new(text).style(style)
         })
         .collect();

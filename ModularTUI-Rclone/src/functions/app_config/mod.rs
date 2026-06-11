@@ -7,11 +7,13 @@ pub mod get_rclone_tui_conf;
 pub mod load;
 pub mod save;
 pub mod export_profile;
+pub mod config_parser;
 
 pub use structs::{AppConfig, ExportResult};
 pub use get_home_dir::get_home_dir;
 pub use get_default_rclone_conf::get_default_rclone_conf;
 pub use get_rclone_tui_conf::get_rclone_tui_conf;
+pub use config_parser::{natural_cmp, reorder_ini_sections, save_sorted_remotes_to_ini};
 
 impl Default for AppConfig {
     fn default() -> Self {

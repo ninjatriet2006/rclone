@@ -7,7 +7,12 @@ use ratatui::{
 };
 use crate::functions::*;
 
-pub fn draw_connection_manager(state: &ConnectionState, frame: &mut Frame, area: Rect) {
+pub fn draw_connection_manager(
+    state: &ConnectionState,
+    frame: &mut Frame,
+    area: Rect,
+    remote_types: &std::collections::HashMap<String, String>,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -35,7 +40,8 @@ pub fn draw_connection_manager(state: &ConnectionState, frame: &mut Frame, area:
                 .get(remote)
                 .cloned()
                 .unwrap_or_else(|| translate("status_unchecked"));
-            let text = format!("  [Cloud] -> {:<25} | {}", remote, status);
+            let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
+            let text = format!("  [{}] -> {:<25} | {}", r_type, remote, status);
             ListItem::new(text).style(style)
         })
         .collect();

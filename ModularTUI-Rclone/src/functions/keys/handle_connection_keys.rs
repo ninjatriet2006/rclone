@@ -20,8 +20,62 @@ pub async fn handle_connection_keys(
                     KeyCode::Esc => {
                         app.screen = Screen::MainMenu;
                     }
-                    KeyCode::Up => app.connection_state.prev(),
-                    KeyCode::Down => app.connection_state.next(),
+                    KeyCode::Up => {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) {
+                            if !app.connection_state.remotes.is_empty() && app.connection_state.selected_idx > 0 {
+                                let idx = app.connection_state.selected_idx;
+                                let remote1 = app.connection_state.remotes[idx].clone();
+                                let remote2 = app.connection_state.remotes[idx - 1].clone();
+                                app.connection_state.remotes.swap(idx, idx - 1);
+                                app.connection_state.selected_idx -= 1;
+                                let config_path = app.config.get_active_profile_path();
+                                let _ = crate::functions::app_config::config_parser::reorder_ini_sections(&config_path, &remote1, &remote2);
+                                app.load_remotes(tx.clone()).await;
+                            }
+                        } else {
+                            app.connection_state.prev();
+                        }
+                    }
+                    KeyCode::Down => {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) {
+                            if !app.connection_state.remotes.is_empty() && app.connection_state.selected_idx < app.connection_state.remotes.len() - 1 {
+                                let idx = app.connection_state.selected_idx;
+                                let remote1 = app.connection_state.remotes[idx].clone();
+                                let remote2 = app.connection_state.remotes[idx + 1].clone();
+                                app.connection_state.remotes.swap(idx, idx + 1);
+                                app.connection_state.selected_idx += 1;
+                                let config_path = app.config.get_active_profile_path();
+                                let _ = crate::functions::app_config::config_parser::reorder_ini_sections(&config_path, &remote1, &remote2);
+                                app.load_remotes(tx.clone()).await;
+                            }
+                        } else {
+                            app.connection_state.next();
+                        }
+                    }
+                    KeyCode::Char('s') | KeyCode::Char('S') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        if !app.connection_state.remotes.is_empty() {
+                            let selected_remote = app.connection_state.remotes[app.connection_state.selected_idx].clone();
+                            let mut remotes = app.connection_state.remotes.clone();
+                            remotes.sort_by(|a, b| {
+                                let type_a = app.remote_types.get(a).map(|s| s.as_str()).unwrap_or("Cloud");
+                                let type_b = app.remote_types.get(b).map(|s| s.as_str()).unwrap_or("Cloud");
+                                match type_a.to_lowercase().cmp(&type_b.to_lowercase()) {
+                                    std::cmp::Ordering::Equal => {
+                                        crate::functions::app_config::config_parser::natural_cmp(a, b)
+                                    }
+                                    ord => ord,
+                                }
+                            });
+                            let config_path = app.config.get_active_profile_path();
+                            if let Ok(_) = crate::functions::app_config::config_parser::save_sorted_remotes_to_ini(&config_path, &remotes) {
+                                app.connection_state.remotes = remotes;
+                                if let Some(new_idx) = app.connection_state.remotes.iter().position(|r| r == &selected_remote) {
+                                    app.connection_state.selected_idx = new_idx;
+                                }
+                                app.load_remotes(tx.clone()).await;
+                            }
+                        }
+                    }
                     KeyCode::Insert => {
                         // Thêm kết nối mới: Bước 1 load providers
                         let res = rclone::rpc("config/providers", "{}");

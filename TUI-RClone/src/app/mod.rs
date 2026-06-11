@@ -1035,7 +1035,7 @@ impl App {
                 match self.screen {
                     Screen::MainMenu => ui::menu::draw(&self.menu_state, f, main_layout[1]),
                     Screen::ConnectionManager => {
-                        ui::connection::draw(&self.connection_state, f, main_layout[1], self.filen_cli_installed)
+                        ui::connection::draw(&self.connection_state, f, main_layout[1], self.filen_cli_installed, &self.remote_types)
                     }
                     Screen::FileExplorer => {
                         ui::explorer::draw(&mut self.explorer_state, f, main_layout[1])
@@ -1283,6 +1283,14 @@ impl App {
                         }
                     }
                     AppEvent::ExplorerOperationFinished { pane, op_name, result } => {
+                        if matches!(
+                            self.explorer_state.popup,
+                            ui::explorer::ExplorerPopup::CopyProgress { .. }
+                                | ui::explorer::ExplorerPopup::MoveProgress { .. }
+                                | ui::explorer::ExplorerPopup::SpecialActionMessage { .. }
+                        ) {
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                        }
                         // Reload pane
                         self.refresh_explorer_pane(pane, tx.clone()).await;
 

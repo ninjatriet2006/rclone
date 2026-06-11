@@ -389,24 +389,33 @@ impl App {
                     }
                 }
                 ui::explorer::ExplorerPopup::SpecialActionsMenu { mut selected_idx } => {
+                    let active_pane = if self.explorer_state.active_pane == ui::explorer::ActivePane::Left { &self.explorer_state.left_pane } else { &self.explorer_state.right_pane };
+                    let is_trash_view = active_pane.remote.contains(",trashed_only=true");
+                    let num_options = if is_trash_view { 3 } else { 11 };
                     match key.code {
                         KeyCode::Esc => {
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
                         }
                         KeyCode::Up => {
-                            selected_idx = if selected_idx == 0 { 9 } else { selected_idx - 1 };
+                            selected_idx = if selected_idx == 0 { num_options - 1 } else { selected_idx - 1 };
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::SpecialActionsMenu { selected_idx };
                         }
                         KeyCode::Down => {
-                            selected_idx = (selected_idx + 1) % 10;
+                            selected_idx = (selected_idx + 1) % num_options;
                             self.explorer_state.popup = ui::explorer::ExplorerPopup::SpecialActionsMenu { selected_idx };
                         }
                         KeyCode::Enter => {
-                            if selected_idx == 9 {
-                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
+                            if is_trash_view {
+                                if selected_idx == 0 {
+                                    self.handle_special_action_selected(11, tx.clone()).await; // Untrash
+                                } else if selected_idx == 1 {
+                                    self.handle_special_action_selected(12, tx.clone()).await; // Exit trash
+                                }
                             } else {
-                                self.explorer_state.popup = ui::explorer::ExplorerPopup::None;
-                                self.handle_special_action_selected(selected_idx, tx.clone()).await;
+                                if selected_idx < 10 {
+                                    self.handle_special_action_selected(selected_idx, tx.clone()).await;
+                                }
                             }
                         }
                         _ => {}

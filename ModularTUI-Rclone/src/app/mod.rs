@@ -1079,7 +1079,7 @@ impl App {
                 match self.screen {
                     Screen::MainMenu => crate::app::main_menu::draw_main_menu(&self.menu_state, f, main_layout[1]),
                     Screen::ConnectionManager => {
-                        crate::app::connection_manager::draw_connection_manager(&self.connection_state, f, main_layout[1])
+                        crate::app::connection_manager::draw_connection_manager(&self.connection_state, f, main_layout[1], &self.remote_types)
                     }
                     Screen::FileExplorer => {
                         crate::app::file_explorer::draw_file_explorer(&mut self.explorer_state, f, main_layout[1])
@@ -1322,6 +1322,7 @@ impl App {
                             self.explorer_state.popup,
                             ExplorerPopup::CopyProgress { .. }
                                 | ExplorerPopup::MoveProgress { .. }
+                                | ExplorerPopup::SpecialActionMessage { .. }
                         ) {
                             self.explorer_state.popup = ExplorerPopup::None;
                         }
