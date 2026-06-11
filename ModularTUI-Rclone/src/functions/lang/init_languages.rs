@@ -256,6 +256,10 @@ srv_systemd_add_param_title: " THÊM THAM SỐ HỆ THỐNG MỚI "
 srv_systemd_add_param_prompt: "Nhập Section và Tên khóa mới (ví dụ: [Service]LimitNOFILE):"
 srv_systemd_add_param_help: "[Enter] Xác nhận | [Esc] Hủy bỏ"
 srv_insert_gui_hint: " [Insert: Chọn GUI]"
+conn_insert_api_key_hint: " [Insert: Nhập tự động API Key]"
+conn_insert_api_key_missing_hint: " [Insert: Yêu cầu cài đặt filen-cli]"
+conn_insert_email_hint: " [Insert: Nhập tự động Email]"
+conn_insert_email_missing_hint: " [Insert: Yêu cầu cài đặt filen-cli]"
 
 # Systemd Fields
 sys_field__service_name_name: "Tên dịch vụ"
@@ -568,6 +572,10 @@ srv_systemd_add_param_title: " ADD NEW SYSTEM PARAMETER "
 srv_systemd_add_param_prompt: "Enter Section and new key name (e.g. [Service]LimitNOFILE):"
 srv_systemd_add_param_help: "[Enter] Confirm | [Esc] Cancel"
 srv_insert_gui_hint: " [Insert: Select GUI]"
+conn_insert_api_key_hint: " [Insert: Auto-fill API Key]"
+conn_insert_api_key_missing_hint: " [Insert: Requires filen-cli]"
+conn_insert_email_hint: " [Insert: Auto-fill Email]"
+conn_insert_email_missing_hint: " [Insert: Requires filen-cli]"
 
 # Systemd Fields
 sys_field__service_name_name: "Service Name"
@@ -652,7 +660,7 @@ fn merge_missing_keys(path: &std::path::Path, defaults: &str) {
     if let Ok(default_map) = serde_yaml::from_str::<HashMap<String, String>>(defaults) {
         let mut modified = false;
         for (k, v) in default_map {
-            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint";
+            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint" || k == "conn_insert_api_key_hint" || k == "conn_insert_api_key_missing_hint" || k == "conn_insert_email_hint" || k == "conn_insert_email_missing_hint";
             if !current_map.contains_key(&k) || is_help_key {
                 if current_map.get(&k) != Some(&v) {
                     current_map.insert(k, v);

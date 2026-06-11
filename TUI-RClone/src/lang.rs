@@ -148,6 +148,8 @@ menu_welcome: "Chào mừng đến với Rclone Clone TUI! Sử dụng phím Mũ
 menu_title: " MENU CHÍNH "
 conn_insert_api_key_hint: " [Insert: Nhập tự động API Key]"
 conn_insert_api_key_missing_hint: " [Insert: Yêu cầu cài đặt filen-cli]"
+conn_insert_email_hint: " [Insert: Nhập tự động Email]"
+conn_insert_email_missing_hint: " [Insert: Yêu cầu cài đặt filen-cli]"
 
 # Connection Manager
 conn_help_navigation: "[Insert]Thêm|[Alt+I]Nhập|[Alt+E]Sửa|[Delete]Xóa|[Alt+S]Sắp xếp|[Alt+↑/↓]Thứ tự|[?]Tính năng|[Mũi tên]Chọn|[ESC]Menu"
@@ -524,6 +526,8 @@ menu_welcome: "Welcome to Rclone Clone TUI! Use Up/Down arrows to navigate and E
 menu_title: " MAIN MENU "
 conn_insert_api_key_hint: " [Insert: Auto-fill API Key]"
 conn_insert_api_key_missing_hint: " [Insert: Requires filen-cli]"
+conn_insert_email_hint: " [Insert: Auto-fill Email]"
+conn_insert_email_missing_hint: " [Insert: Requires filen-cli]"
 
 # Connection Manager
 conn_help_navigation: "[Insert]Add|[Alt+I]Import|[Alt+E]Edit|[Delete]Delete|[Alt+S]Sort|[Alt+↑/↓]Reorder|[?]Features|[Arrows]Select|[ESC]Menu"
@@ -809,7 +813,7 @@ fn merge_missing_keys(path: &std::path::Path, defaults: &str) {
     if let Ok(default_map) = serde_yaml::from_str::<HashMap<String, String>>(defaults) {
         let mut modified = false;
         for (k, v) in default_map {
-            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k.ends_with("_friendly") || k.starts_with("menu_") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint" || k == "conn_insert_api_key_hint" || k == "conn_insert_api_key_missing_hint" || k == "srv_mount_fuse_missing_hint";
+            let is_help_key = k.ends_with("_help") || k.ends_with("_save") || k.ends_with("_cancel") || k.ends_with("_friendly") || k.starts_with("menu_") || k == "conn_help_navigation" || k == "mon_help" || k == "prof_help" || k == "prof_help_wizard" || k == "srv_help_edit" || k == "srv_insert_gui_hint" || k == "conn_insert_api_key_hint" || k == "conn_insert_api_key_missing_hint" || k == "conn_insert_email_hint" || k == "conn_insert_email_missing_hint" || k == "srv_mount_fuse_missing_hint";
             if !current_map.contains_key(&k) || is_help_key {
                 if current_map.get(&k) != Some(&v) {
                     current_map.insert(k, v);

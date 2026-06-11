@@ -1291,14 +1291,20 @@ impl App {
                                             };
                                     }
                                     KeyCode::Insert => {
-                                        let is_api_key_field = filtered_fields
-                                            .get(selected_field_idx)
-                                            .map(|f| f.0.as_str())
-                                            == Some("api_key");
-                                        if provider.to_lowercase() == "filen" && is_api_key_field {
-                                            if let Some(key_val) = try_get_filen_api_key() {
-                                                input_buffer = key_val;
-                                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                        if let Some(f) = filtered_fields.get(selected_field_idx) {
+                                            let field_name = f.0.as_str();
+                                            if provider.to_lowercase() == "filen" {
+                                                if field_name == "api_key" {
+                                                    if let Some(key_val) = try_get_filen_api_key() {
+                                                        input_buffer = key_val;
+                                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                                    }
+                                                } else if field_name == "email" {
+                                                    if let Some(email_val) = try_get_filen_email() {
+                                                        input_buffer = email_val;
+                                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                                    }
+                                                }
                                                 self.connection_state.wizard =
                                                     ui::connection::WizardState::AdvancedSetup {
                                                         provider,
@@ -1718,14 +1724,20 @@ impl App {
                                             };
                                     }
                                     KeyCode::Insert => {
-                                        let is_api_key_field = filtered_fields
-                                            .get(selected_idx)
-                                            .map(|f| f.0.as_str())
-                                            == Some("api_key");
-                                        if provider.to_lowercase() == "filen" && is_api_key_field {
-                                            if let Some(key_val) = try_get_filen_api_key() {
-                                                input_buffer = key_val;
-                                                self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                        if let Some(f) = filtered_fields.get(selected_idx) {
+                                            let field_name = f.0.as_str();
+                                            if provider.to_lowercase() == "filen" {
+                                                if field_name == "api_key" {
+                                                    if let Some(key_val) = try_get_filen_api_key() {
+                                                        input_buffer = key_val;
+                                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                                    }
+                                                } else if field_name == "email" {
+                                                    if let Some(email_val) = try_get_filen_email() {
+                                                        input_buffer = email_val;
+                                                        self.connection_state.edit_cursor_idx = input_buffer.chars().count();
+                                                    }
+                                                }
                                                 self.connection_state.wizard =
                                                     ui::connection::WizardState::EditSetup {
                                                         remote_name,
@@ -2529,6 +2541,37 @@ fn try_get_filen_api_key() -> Option<String> {
                 let key = line[actual_colon_pos + 1..].trim().to_string();
                 if !key.is_empty() {
                     return Some(key);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn try_get_filen_email() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let filen_path = std::path::Path::new(&home).join(".filen-cli/bin/filen");
+    if !filen_path.exists() {
+        return None;
+    }
+    
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("echo 'y' | '{}' export-api-key", filen_path.to_string_lossy()))
+        .output()
+        .ok()?;
+        
+    if !output.status.success() {
+        return None;
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(pos) = line.find("API Key for ") {
+            if let Some(colon_pos) = line[pos + 12..].find(':') {
+                let email = line[pos + 12 .. pos + 12 + colon_pos].trim().to_string();
+                if !email.is_empty() {
+                    return Some(email);
                 }
             }
         }

@@ -1050,23 +1050,43 @@ fn draw_advanced_setup_wizard(
                 } else {
                     spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
                 }
-                if provider.to_lowercase() == "filen" && name == "api_key" {
-                    if filen_cli_installed {
-                        spans.push(Span::styled(
-                            crate::lang::translate("conn_insert_api_key_hint"),
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .bg(bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    } else {
-                        spans.push(Span::styled(
-                            crate::lang::translate("conn_insert_api_key_missing_hint"),
-                            Style::default()
-                                .fg(Color::Red)
-                                .bg(bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
+                if provider.to_lowercase() == "filen" {
+                    if name == "api_key" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_api_key_hint"),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_api_key_missing_hint"),
+                                Style::default()
+                                    .fg(Color::Red)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    } else if name == "email" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_email_hint"),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_email_missing_hint"),
+                                Style::default()
+                                    .fg(Color::Red)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
                     }
                 }
                 Line::from(spans)
@@ -1328,23 +1348,43 @@ fn draw_edit_setup_wizard(
                 } else {
                     spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
                 }
-                if provider.to_lowercase() == "filen" && name == "api_key" {
-                    if filen_cli_installed {
-                        spans.push(Span::styled(
-                            crate::lang::translate("conn_insert_api_key_hint"),
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .bg(bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    } else {
-                        spans.push(Span::styled(
-                            crate::lang::translate("conn_insert_api_key_missing_hint"),
-                            Style::default()
-                                .fg(Color::Red)
-                                .bg(bg)
-                                .add_modifier(Modifier::BOLD),
-                        ));
+                if provider.to_lowercase() == "filen" {
+                    if name == "api_key" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_api_key_hint"),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_api_key_missing_hint"),
+                                Style::default()
+                                    .fg(Color::Red)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    } else if name == "email" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_email_hint"),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                crate::lang::translate("conn_insert_email_missing_hint"),
+                                Style::default()
+                                    .fg(Color::Red)
+                                    .bg(bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        }
                     }
                 }
                 Line::from(spans)

@@ -159,6 +159,35 @@ pub fn draw_advanced_setup_wizard(
                 } else {
                     spans.push(Span::styled(display_val, Style::default().fg(fg).bg(bg)));
                 }
+                if provider.to_lowercase() == "filen" {
+                    let home_dir = crate::functions::get_home_dir();
+                    let filen_cli_installed = std::path::Path::new(&home_dir).join(".filen-cli/bin/filen").exists();
+                    if name == "api_key" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                translate("conn_insert_api_key_hint"),
+                                Style::default().fg(Color::Yellow).bg(bg).add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                translate("conn_insert_api_key_missing_hint"),
+                                Style::default().fg(Color::Red).bg(bg).add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    } else if name == "email" {
+                        if filen_cli_installed {
+                            spans.push(Span::styled(
+                                translate("conn_insert_email_hint"),
+                                Style::default().fg(Color::Yellow).bg(bg).add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                translate("conn_insert_email_missing_hint"),
+                                Style::default().fg(Color::Red).bg(bg).add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    }
+                }
                 spans.push(Span::raw(format!(" - ({})", friendly_desc)));
                 Line::from(spans)
             } else {
