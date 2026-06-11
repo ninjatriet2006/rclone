@@ -21,6 +21,7 @@ pub use db::{
     remove_active_operation,
     load_active_operations,
     clear_active_operations,
+    update_active_operation_threads,
     update_task_status_in_active_operation,
     update_tasks_status_in_active_operation,
     append_tasks_to_active_operation,

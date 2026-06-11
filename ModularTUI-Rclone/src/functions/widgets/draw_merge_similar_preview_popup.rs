@@ -69,7 +69,34 @@ pub fn draw_merge_similar_preview_popup(
             style = style.bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD);
         }
 
-        items.push(ListItem::new(Line::from(Span::styled(formatted, style))));
+        let mut spans = Vec::new();
+        let indicator_style = if is_selected {
+            Style::default().bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)
+        };
+        let expand_style = if is_selected {
+            Style::default().bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
+        };
+
+        if let Some(idx) = formatted.find('▶') {
+            let prefix = &formatted[..idx];
+            let rest = &formatted[idx + '▶'.len_utf8()..];
+            spans.push(Span::styled(prefix.to_string(), style));
+            spans.push(Span::styled("▶", indicator_style));
+            spans.push(Span::styled(rest.to_string(), style));
+        } else if let Some(idx) = formatted.find('▼') {
+            let prefix = &formatted[..idx];
+            let rest = &formatted[idx + '▼'.len_utf8()..];
+            spans.push(Span::styled(prefix.to_string(), style));
+            spans.push(Span::styled("▼", expand_style));
+            spans.push(Span::styled(rest.to_string(), style));
+        } else {
+            spans.push(Span::styled(formatted, style));
+        }
+        items.push(ListItem::new(Line::from(spans)));
     }
 
     let height = chunks[0].height as usize;

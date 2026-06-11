@@ -142,6 +142,8 @@ pub struct ActiveOperation {
     pub is_copy: bool,
     pub completed_items: Option<Vec<String>>,
     pub tasks: Option<Vec<FileTask>>,
+    pub transfers: Option<u64>,
+    pub checkers: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -255,6 +257,11 @@ pub fn prepare_active_operation_for_resume(id: &str) {
 pub fn remove_active_operation(id: &str) {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     let _ = db::remove_active_operation(id);
+}
+
+pub fn update_active_operation_threads(id: &str, transfers: u64, checkers: u64) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = db::update_active_operation_threads(id, transfers, checkers);
 }
 
 pub fn load_active_operations() -> Vec<ActiveOperation> {
@@ -1556,6 +1563,8 @@ impl App {
                                 is_copy: true,
                                 completed_items: Some(Vec::new()),
                                 tasks: Some(Vec::new()),
+                                transfers: None,
+                                checkers: None,
                             };
                             save_active_operation(&op);
 
@@ -2096,6 +2105,8 @@ pub(crate) async fn run_rpc_job_async_with_progress(
                     is_copy,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 save_active_operation(&op);
             }
@@ -2787,6 +2798,8 @@ mod tests {
             is_copy: true,
             completed_items: Some(Vec::new()),
             tasks: Some(tasks),
+            transfers: None,
+            checkers: None,
         };
 
         save_active_operation(&op);

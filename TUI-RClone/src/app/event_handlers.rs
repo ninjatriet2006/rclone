@@ -525,13 +525,14 @@ impl App {
 
                 for op in &active_ops_local {
                     let is_scanning = pre_ops_local.iter().any(|po| po.id == op.id && po.status == "scanning");
+                    let opt_checkers = op.checkers.unwrap_or(4) as usize;
                     if is_scanning {
-                        active_checks += 4; // giả lập 4 checkers trong quá trình kiểm tra/quét
+                        active_checks += opt_checkers;
                     } else if let Some(ref tasks) = op.tasks {
                         let transferring_count = tasks.iter().filter(|t| t.status == crate::app::TaskStatus::Transferring).count();
                         active_transfers += transferring_count;
                         if transferring_count > 0 {
-                            active_checks += 4; // giả lập 4 checkers trong quá trình copy
+                            active_checks += opt_checkers;
                         }
 
                         let op_stats = local_stats_guard.as_ref().and_then(|map| map.get(&op.id));

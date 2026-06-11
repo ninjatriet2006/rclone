@@ -77,6 +77,11 @@ pub fn remove_active_operation(id: &str) {
     let _ = crate::functions::remove_active_operation(id);
 }
 
+pub fn update_active_operation_threads(id: &str, transfers: u64, checkers: u64) {
+    let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
+    let _ = crate::functions::update_active_operation_threads(id, transfers, checkers);
+}
+
 pub fn load_active_operations() -> Vec<ActiveOperation> {
     let _lock = ACTIVE_OPS_LOCK.lock().unwrap();
     crate::functions::load_active_operations().unwrap_or_default()
@@ -644,6 +649,23 @@ impl App {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Cộng dồn active_transfers và active_checks cho các active operations nội bộ
+                let active_ops_local = load_active_operations();
+                let pre_ops_local = load_pre_operations();
+                for op in &active_ops_local {
+                    let is_scanning = pre_ops_local.iter().any(|po| po.id == op.id && po.status == "scanning");
+                    let opt_checkers = op.checkers.unwrap_or(4) as usize;
+                    if is_scanning {
+                        active_checks += opt_checkers;
+                    } else if let Some(ref tasks) = op.tasks {
+                        let transferring_count = tasks.iter().filter(|t| t.status == crate::functions::TaskStatus::Transferring).count();
+                        active_transfers += transferring_count;
+                        if transferring_count > 0 {
+                            active_checks += opt_checkers;
                         }
                     }
                 }

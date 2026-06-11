@@ -140,6 +140,8 @@ pub async fn run_rpc_job_async_with_progress(
                     is_copy,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
             }

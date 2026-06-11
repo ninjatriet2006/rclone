@@ -818,6 +818,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1000,6 +1002,8 @@ impl App {
                     is_copy: false,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
                 tokio::spawn(async move {
@@ -1039,6 +1043,8 @@ impl App {
                     is_copy: false,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
                 tokio::spawn(async move {
@@ -1269,6 +1275,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1336,6 +1344,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: None,
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1379,6 +1389,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1430,6 +1442,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -3087,6 +3101,9 @@ pub async fn start_async_checker_and_transfer(
     let tx_clone = tx.clone();
     let config_path = crate::app_config::AppConfig::load().get_active_profile_path();
 
+    let is_dir_for_checker = is_dir;
+    let is_dir_for_transfer = is_dir;
+
     let checker_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let checker_running_clone = checker_running.clone();
 
@@ -3100,7 +3117,7 @@ pub async fn start_async_checker_and_transfer(
             action_type: if is_copy { "copy".to_string() } else { "move".to_string() },
             src: src_clone.clone(),
             dest: dest_clone.clone(),
-            is_dir,
+            is_dir: is_dir_for_checker,
             use_checksum,
             items: items_to_save,
             scanned_count: 0,
@@ -3110,13 +3127,19 @@ pub async fn start_async_checker_and_transfer(
         };
         crate::app::save_pre_operation(&pre_op);
 
+        let has_dirs = if let Some(ref list) = items {
+            list.iter().any(|item| item.is_dir)
+        } else {
+            is_dir_for_checker
+        };
+
         let mut dest_files = std::collections::HashMap::new();
-        let list_dest = is_dir || items.is_some();
+        let list_dest = (is_dir_for_checker || items.is_some()) && !skip_flag.load(std::sync::atomic::Ordering::Relaxed);
         if list_dest {
             let list_param = serde_json::json!({
                 "fs": dest_clone,
                 "remote": "",
-                "opt": { "recurse": true }
+                "opt": { "recurse": has_dirs }
             }).to_string();
             if let Ok(res) = rclone::rpc_async("operations/list".to_string(), list_param).await {
                 check_and_apply_rate_limiting(&res).await;
@@ -3151,7 +3174,7 @@ pub async fn start_async_checker_and_transfer(
                 }
             }
         } else {
-            if is_dir {
+            if is_dir_for_checker {
                 dirs_to_walk.push("".to_string());
             } else {
                 let (_, filename) = parse_parent_and_child(&src_clone);
@@ -3360,7 +3383,8 @@ pub async fn start_async_checker_and_transfer(
             "dstFs": dest_transfer.clone(),
         });
         let max_bw = crate::app_config::AppConfig::load().max_bandwidth_bytes_per_sec;
-        let (opt_transfers, opt_checkers) = inject_optimal_thread_config(&mut dummy_param, &src_transfer, is_dir, max_bw).await;
+        let (opt_transfers, opt_checkers) = inject_optimal_thread_config(&mut dummy_param, &src_transfer, is_dir_for_transfer, max_bw).await;
+        crate::app::update_active_operation_threads(&op_id_transfer, opt_transfers, opt_checkers);
         let opt_transfers_str = opt_transfers.to_string();
         let opt_checkers_str = opt_checkers.to_string();
 

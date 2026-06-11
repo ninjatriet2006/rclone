@@ -137,6 +137,8 @@ pub async fn execute_fallback_action(
                 is_copy: false,
                 completed_items: Some(Vec::new()),
                 tasks: None,
+                transfers: None,
+                checkers: None,
             };
             crate::app::save_active_operation(&op);
             tokio::spawn(async move {
@@ -176,6 +178,8 @@ pub async fn execute_fallback_action(
                 is_copy: false,
                 completed_items: Some(Vec::new()),
                 tasks: None,
+                transfers: None,
+                checkers: None,
             };
             crate::app::save_active_operation(&op);
             tokio::spawn(async move {
@@ -483,6 +487,8 @@ pub async fn execute_fallback_action(
                 is_copy: true,
                 completed_items: Some(Vec::new()),
                 tasks: None,
+                transfers: None,
+                checkers: None,
             };
             crate::app::save_active_operation(&op);
             tokio::spawn(async move {
@@ -620,6 +626,8 @@ pub async fn execute_fallback_action(
                 is_copy: true,
                 completed_items: Some(Vec::new()),
                 tasks: None,
+                transfers: None,
+                checkers: None,
             };
             crate::app::save_active_operation(&op);
             tokio::spawn(async move {

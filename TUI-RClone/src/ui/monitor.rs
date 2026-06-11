@@ -1096,6 +1096,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
 
             let line = if node.is_job {
                 let expand_marker = if node.expanded { "▼ " } else { "▶ " };
+                let marker_color = Color::LightCyan;
                 let bar_spans = make_colored_progress_bar(node.percentage, 12, true, false, Color::Yellow);
                 let eta_str = if node.eta >= 0 {
                     format!("ETA: {}s", node.eta)
@@ -1105,7 +1106,7 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
 
                 let mut spans = vec![
                     Span::raw(indent),
-                    Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
+                    Span::styled(expand_marker, Style::default().fg(marker_color).add_modifier(Modifier::BOLD)),
                     Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
                 ];
                 spans.extend(bar_spans);
@@ -1141,10 +1142,11 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                 Line::from(spans)
             } else if node.is_dir {
                 let expand_marker = if node.expanded { "▼ " } else { "▶ " };
+                let marker_color = Color::LightCyan;
                 let line = if node.id == "group/background_tasks" {
                     let mut spans = vec![
                         Span::raw(indent),
-                        Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
+                        Span::styled(expand_marker, Style::default().fg(marker_color).add_modifier(Modifier::BOLD)),
                         Span::styled("📁 ", Style::default().fg(Color::Cyan)),
                         Span::styled(
                             format!("{} ", node.name),
@@ -1188,9 +1190,10 @@ pub fn draw(state: &mut MonitorState, frame: &mut Frame, area: Rect) {
                     Line::from(spans)
                 } else if node.id.starts_with("op/") {
                     let is_op_checking = node.status == "checking";
+                    let marker_color = Color::LightCyan;
                     let mut spans = vec![
                         Span::raw(indent),
-                        Span::styled(expand_marker, Style::default().fg(Color::Yellow)),
+                        Span::styled(expand_marker, Style::default().fg(marker_color).add_modifier(Modifier::BOLD)),
                     ];
 
                     if node.id.contains(':') {

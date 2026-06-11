@@ -1392,6 +1392,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1432,6 +1434,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1485,6 +1489,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 
@@ -1538,6 +1544,8 @@ impl App {
                     is_copy: true,
                     completed_items: Some(Vec::new()),
                     tasks: Some(Vec::new()),
+                    transfers: None,
+                    checkers: None,
                 };
                 crate::app::save_active_operation(&op);
 

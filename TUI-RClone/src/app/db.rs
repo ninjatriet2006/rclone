@@ -26,10 +26,15 @@ pub fn init_db() -> Result<(), rusqlite::Error> {
             use_checksum INTEGER NOT NULL,
             is_copy INTEGER NOT NULL,
             items TEXT NOT NULL,
-            completed_items TEXT
+            completed_items TEXT,
+            transfers INTEGER,
+            checkers INTEGER
         )",
         [],
     )?;
+    // Hỗ trợ cập nhật cơ sở dữ liệu cũ:
+    let _ = conn.execute("ALTER TABLE operations ADD COLUMN transfers INTEGER", []);
+    let _ = conn.execute("ALTER TABLE operations ADD COLUMN checkers INTEGER", []);
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tasks (
             op_id TEXT NOT NULL,
@@ -59,8 +64,8 @@ pub fn save_active_operation(op: &ActiveOperation) -> Result<(), rusqlite::Error
         .unwrap_or_else(|| "[]".to_string());
 
     tx.execute(
-        "INSERT OR REPLACE INTO operations (id, action_type, src, dest, is_dir, use_checksum, is_copy, items, completed_items)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT OR REPLACE INTO operations (id, action_type, src, dest, is_dir, use_checksum, is_copy, items, completed_items, transfers, checkers)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             op.id,
             op.action_type,
@@ -71,6 +76,8 @@ pub fn save_active_operation(op: &ActiveOperation) -> Result<(), rusqlite::Error
             if op.is_copy { 1 } else { 0 },
             items_json,
             completed_items_json,
+            op.transfers,
+            op.checkers,
         ],
     )?;
 
@@ -436,7 +443,7 @@ pub fn load_active_operations() -> Result<Vec<ActiveOperation>, rusqlite::Error>
     
     // Đọc tất cả operations
     let mut stmt_ops = conn.prepare(
-        "SELECT id, action_type, src, dest, is_dir, use_checksum, is_copy, items, completed_items FROM operations"
+        "SELECT id, action_type, src, dest, is_dir, use_checksum, is_copy, items, completed_items, transfers, checkers FROM operations"
     )?;
     let mut rows_ops = stmt_ops.query([])?;
     
@@ -451,6 +458,8 @@ pub fn load_active_operations() -> Result<Vec<ActiveOperation>, rusqlite::Error>
         let is_copy: i32 = row.get(6)?;
         let items_str: String = row.get(7)?;
         let completed_str: String = row.get(8)?;
+        let transfers: Option<u64> = row.get(9)?;
+        let checkers: Option<u64> = row.get(10)?;
 
         let items: Vec<String> = serde_json::from_str(&items_str).unwrap_or_default();
         let completed_items: Option<Vec<String>> = Some(serde_json::from_str(&completed_str).unwrap_or_default());
@@ -511,6 +520,8 @@ pub fn load_active_operations() -> Result<Vec<ActiveOperation>, rusqlite::Error>
             is_copy: is_copy != 0,
             completed_items,
             tasks: tasks_opt,
+            transfers,
+            checkers,
         });
     }
 
@@ -521,5 +532,14 @@ pub fn clear_active_operations() -> Result<(), rusqlite::Error> {
     let conn = get_connection()?;
     conn.execute("DELETE FROM tasks", [])?;
     conn.execute("DELETE FROM operations", [])?;
+    Ok(())
+}
+
+pub fn update_active_operation_threads(id: &str, transfers: u64, checkers: u64) -> Result<(), rusqlite::Error> {
+    let conn = get_connection()?;
+    conn.execute(
+        "UPDATE operations SET transfers = ?1, checkers = ?2 WHERE id = ?3",
+        params![transfers as i64, checkers as i64, id],
+    )?;
     Ok(())
 }

@@ -12,10 +12,14 @@ pub fn init_db() -> Result<(), rusqlite::Error> {
             use_checksum INTEGER NOT NULL,
             is_copy INTEGER NOT NULL,
             items TEXT NOT NULL,
-            completed_items TEXT
+            completed_items TEXT,
+            transfers INTEGER,
+            checkers INTEGER
         )",
         [],
     )?;
+    let _ = conn.execute("ALTER TABLE operations ADD COLUMN transfers INTEGER", []);
+    let _ = conn.execute("ALTER TABLE operations ADD COLUMN checkers INTEGER", []);
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tasks (
             op_id TEXT NOT NULL,

@@ -525,6 +525,8 @@ pub struct ActiveOperation {
     pub is_copy: bool,
     pub completed_items: Option<Vec<String>>,
     pub tasks: Option<Vec<FileTask>>,
+    pub transfers: Option<u64>,
+    pub checkers: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

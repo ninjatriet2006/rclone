@@ -13,6 +13,7 @@ pub use operations::{
     remove_active_operation,
     load_active_operations,
     clear_active_operations,
+    update_active_operation_threads,
 };
 pub use tasks::{
     update_task_status_in_active_operation,
