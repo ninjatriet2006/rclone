@@ -42,6 +42,27 @@ impl TuiCustomConfig {
         if path.exists() {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(config) = serde_yaml::from_str::<TuiCustomConfig>(&content) {
+                    // Kiểm tra xem có thiếu trường nào trong tệp YAML trên đĩa không.
+                    // Nếu thiếu bất kỳ trường nào, tiến hành ghi đè lại để bổ sung trường mới và giữ nguyên các giá trị cũ đã sửa đổi.
+                    let required_keys = vec![
+                        "default_local_dir:",
+                        "default_remote_dir:",
+                        "remote_export_default_file:",
+                        "profile_export_default_dir:",
+                        "db_file_path:",
+                        "features_cache_file_path:",
+                        "default_mount_dir:",
+                    ];
+                    let mut needs_update = false;
+                    for key in required_keys {
+                        if !content.contains(key) {
+                            needs_update = true;
+                            break;
+                        }
+                    }
+                    if needs_update {
+                        let _ = config.save_with_comments();
+                    }
                     return config;
                 }
             }
