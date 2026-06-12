@@ -69,6 +69,7 @@ func init() {
 
 You can get this from the web control panel.`,
 			Sensitive: true,
+			Required:  true,
 		}, {
 			Name: "root_folder_id",
 			Help: `ID of the root folder

@@ -504,6 +504,27 @@ Properties:
 - Type:        SizeSuffix
 - Default:     off
 
+#### --onedrive-tenant-url
+
+The tenant URL for non-admin OneDrive access.
+
+Set this to your SharePoint tenant URL to use the SharePoint v2.0 API
+endpoint instead of the standard Microsoft Graph API. This allows
+accessing business OneDrive without admin consent.
+
+The URL can be found in your browser's developer tools by searching
+for "driveAccessToken" in the network requests. Look for the
+".driveUrl" field which contains the tenant URL and drive ID.
+
+Example: https://your-tenant.sharepoint.com/_api
+
+Properties:
+
+- Config:      tenant_url
+- Env Var:     RCLONE_ONEDRIVE_TENANT_URL
+- Type:        string
+- Required:    false
+
 #### --onedrive-chunk-size
 
 Chunk size to upload files with - must be multiple of 320k (327,680 bytes).

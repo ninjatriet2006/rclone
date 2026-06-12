@@ -612,6 +612,22 @@ Properties:
 - Type:        bool
 - Default:     false
 
+#### --local-fatal-if-no-space
+
+Make out-of-space errors fatal during transfers.
+
+When enabled, an ENOSPC error during a write returns a fatal error so
+that rclone aborts rather than retrying the operation. Useful for
+backup scripts that should halt loudly on a full disk rather than spin
+retrying.
+
+Properties:
+
+- Config:      fatal_if_no_space
+- Env Var:     RCLONE_LOCAL_FATAL_IF_NO_SPACE
+- Type:        bool
+- Default:     false
+
 #### --local-time-type
 
 Set what kind of time is returned.
