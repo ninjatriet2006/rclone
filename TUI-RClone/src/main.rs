@@ -3,6 +3,7 @@ mod app_config;
 mod lang;
 mod rclone;
 mod ui;
+mod custom_config;
 
 use std::env;
 use std::io::{self, IsTerminal};

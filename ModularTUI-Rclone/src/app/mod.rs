@@ -359,7 +359,7 @@ impl App {
             .unwrap_or(0);
 
         let mut features_cache = std::collections::HashMap::new();
-        let cache_path = AppConfig::config_dir().join("features_cache.json");
+        let cache_path = PathBuf::from(crate::functions::app_config::TuiCustomConfig::load().features_cache_file_path);
         if let Ok(content) = std::fs::read_to_string(&cache_path) {
             if let Ok(parsed) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
                 features_cache = parsed;

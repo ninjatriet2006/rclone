@@ -16,8 +16,7 @@ impl AppConfig {
             return ExportResult::SourceNotFound;
         }
 
-        let home = get_home_dir();
-        let downloads_dir = PathBuf::from(home).join("Downloads").join("Saved Profile");
+        let downloads_dir = PathBuf::from(crate::functions::app_config::TuiCustomConfig::load().profile_export_default_dir);
 
         if let Err(e) = fs::create_dir_all(&downloads_dir) {
             return ExportResult::Error(format!(

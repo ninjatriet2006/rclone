@@ -23,7 +23,7 @@ pub use tasks::{
 };
 
 pub fn get_db_path() -> PathBuf {
-    crate::functions::AppConfig::config_dir().join("active_ops.db")
+    PathBuf::from(crate::functions::app_config::TuiCustomConfig::load().db_file_path)
 }
 
 pub fn get_connection() -> Result<Connection, rusqlite::Error> {

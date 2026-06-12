@@ -291,7 +291,7 @@ pub(crate) fn parse_exec_start_full(
         fields.push((
             "_mount_path".to_string(),
             "Thư mục Mount".to_string(),
-            "/media/bimatkeo/DATA/Torrents".to_string(),
+            crate::functions::app_config::TuiCustomConfig::load().default_mount_dir,
             Vec::new(),
         ));
         fields.push((

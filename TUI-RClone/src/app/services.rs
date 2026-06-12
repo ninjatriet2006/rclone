@@ -953,7 +953,7 @@ impl App {
         fields.push((
             "_mount_path".to_string(),
             "Thư mục Mount".to_string(),
-            "/media/bimatkeo/DATA/Torrents".to_string(),
+            crate::custom_config::TuiCustomConfig::load().default_mount_dir,
             Vec::new(),
         ));
         fields.push((

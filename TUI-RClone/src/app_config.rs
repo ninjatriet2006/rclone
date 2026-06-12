@@ -363,8 +363,7 @@ impl AppConfig {
             return ExportResult::SourceNotFound;
         }
 
-        let home = get_home_dir();
-        let downloads_dir = PathBuf::from(home).join("Downloads").join("Saved Profile");
+        let downloads_dir = PathBuf::from(crate::custom_config::TuiCustomConfig::load().profile_export_default_dir);
 
         // Tạo thư mục nếu chưa tồn tại (Giải quyết Bug 57, 91)
         if let Err(e) = fs::create_dir_all(&downloads_dir) {

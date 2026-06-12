@@ -27,21 +27,39 @@ pub fn draw_connection_manager(
         .iter()
         .enumerate()
         .map(|(i, remote)| {
-            let style = if i == state.selected_idx && state.wizard == WizardState::None {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
+            let is_selected_item = state.selected_names.contains(remote);
+            let select_prefix = if is_selected_item {
+                "✔ "
+            } else {
+                "  "
+            };
+
+            let mut style = if i == state.selected_idx && state.wizard == WizardState::None {
+                if is_selected_item {
+                    Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                }
+            } else if is_selected_item {
+                Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
+
+            if state.shift_anchor == Some(i) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+                if i != state.selected_idx || state.wizard != WizardState::None {
+                    style = style.fg(Color::LightMagenta);
+                }
+            }
+
             let status = state
                 .remote_statuses
                 .get(remote)
                 .cloned()
                 .unwrap_or_else(|| translate("status_unchecked"));
             let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
-            let text = format!("  [{}] -> {:<25} | {}", r_type, remote, status);
+            let text = format!("{} [{}] -> {:<25} | {}", select_prefix, r_type, remote, status);
             ListItem::new(text).style(style)
         })
         .collect();
@@ -191,6 +209,9 @@ pub fn draw_connection_manager(
         }
         WizardState::ImportConfigInput { input_buffer } => {
             draw_import_config_input_wizard(frame, input_buffer);
+        }
+        WizardState::ExportConfigInput { input_buffer, .. } => {
+            draw_export_config_input_wizard(frame, input_buffer, state.edit_cursor_idx);
         }
         WizardState::None => {}
     }

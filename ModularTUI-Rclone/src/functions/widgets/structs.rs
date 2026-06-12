@@ -108,6 +108,10 @@ pub enum WizardState {
     ImportConfigInput {
         input_buffer: String,
     },
+    ExportConfigInput {
+        selected_remotes: Vec<String>,
+        input_buffer: String,
+    },
 }
 
 pub struct ConnectionState {
@@ -118,6 +122,9 @@ pub struct ConnectionState {
     pub info_message: Option<String>,
     pub remote_statuses: HashMap<String, String>,
     pub edit_cursor_idx: usize,
+    pub selected_names: std::collections::HashSet<String>,
+    pub shift_anchor: Option<usize>,
+    pub shift_active: bool,
 }
 
 impl ConnectionState {
@@ -130,6 +137,9 @@ impl ConnectionState {
             info_message: None,
             remote_statuses: HashMap::new(),
             edit_cursor_idx: 0,
+            selected_names: std::collections::HashSet::new(),
+            shift_anchor: None,
+            shift_active: false,
         }
     }
 
@@ -178,12 +188,18 @@ pub struct ExplorerPane {
 
 impl ExplorerPane {
     pub fn new(remote: &str) -> Self {
+        let config = crate::functions::app_config::TuiCustomConfig::load();
         ExplorerPane {
             remote: remote.to_string(),
             path: if remote.is_empty() {
-                crate::functions::get_home_dir()
+                let local_dir = config.default_local_dir.trim();
+                if local_dir.is_empty() {
+                    crate::functions::get_home_dir()
+                } else {
+                    local_dir.to_string()
+                }
             } else {
-                "".to_string()
+                config.default_remote_dir.clone()
             },
             items: Vec::new(),
             selected_idx: 0,

@@ -25,7 +25,26 @@ impl App {
                         self.screen = Screen::MainMenu;
                     }
                     KeyCode::Up => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            if !self.connection_state.remotes.is_empty() {
+                                if self.connection_state.shift_anchor.is_none() {
+                                    self.connection_state.shift_anchor = Some(self.connection_state.selected_idx);
+                                }
+                                self.connection_state.shift_active = true;
+                                self.connection_state.prev();
+                                
+                                if let Some(anchor) = self.connection_state.shift_anchor {
+                                    let start = anchor.min(self.connection_state.selected_idx);
+                                    let end = anchor.max(self.connection_state.selected_idx);
+                                    self.connection_state.selected_names.clear();
+                                    for i in start..=end {
+                                        if i < self.connection_state.remotes.len() {
+                                            self.connection_state.selected_names.insert(self.connection_state.remotes[i].clone());
+                                        }
+                                    }
+                                }
+                            }
+                        } else if key.modifiers.contains(KeyModifiers::ALT) {
                             if !self.connection_state.remotes.is_empty() && self.connection_state.selected_idx > 0 {
                                 let idx = self.connection_state.selected_idx;
                                 let remote1 = self.connection_state.remotes[idx].clone();
@@ -37,11 +56,32 @@ impl App {
                                 self.load_remotes(tx.clone()).await;
                             }
                         } else {
+                            self.connection_state.shift_anchor = None;
+                            self.connection_state.shift_active = false;
                             self.connection_state.prev();
                         }
                     }
                     KeyCode::Down => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::ALT) {
+                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                            if !self.connection_state.remotes.is_empty() {
+                                if self.connection_state.shift_anchor.is_none() {
+                                    self.connection_state.shift_anchor = Some(self.connection_state.selected_idx);
+                                }
+                                self.connection_state.shift_active = true;
+                                self.connection_state.next();
+                                
+                                if let Some(anchor) = self.connection_state.shift_anchor {
+                                    let start = anchor.min(self.connection_state.selected_idx);
+                                    let end = anchor.max(self.connection_state.selected_idx);
+                                    self.connection_state.selected_names.clear();
+                                    for i in start..=end {
+                                        if i < self.connection_state.remotes.len() {
+                                            self.connection_state.selected_names.insert(self.connection_state.remotes[i].clone());
+                                        }
+                                    }
+                                }
+                            }
+                        } else if key.modifiers.contains(KeyModifiers::ALT) {
                             if !self.connection_state.remotes.is_empty() && self.connection_state.selected_idx < self.connection_state.remotes.len() - 1 {
                                 let idx = self.connection_state.selected_idx;
                                 let remote1 = self.connection_state.remotes[idx].clone();
@@ -53,7 +93,82 @@ impl App {
                                 self.load_remotes(tx.clone()).await;
                             }
                         } else {
+                            self.connection_state.shift_anchor = None;
+                            self.connection_state.shift_active = false;
                             self.connection_state.next();
+                        }
+                    }
+                    KeyCode::Char(' ') | KeyCode::Char('v') | KeyCode::Char('V')
+                        if ((key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V')) && key.modifiers.contains(KeyModifiers::ALT))
+                        || (key.code == KeyCode::Char(' ') && key.modifiers.is_empty()) => {
+                        if !self.connection_state.remotes.is_empty() {
+                            let idx = self.connection_state.selected_idx;
+                            let name = self.connection_state.remotes[idx].clone();
+                            if self.connection_state.selected_names.contains(&name) {
+                                self.connection_state.selected_names.remove(&name);
+                            } else {
+                                self.connection_state.selected_names.insert(name);
+                            }
+                        }
+                    }
+                    KeyCode::Char('V') | KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::SHIFT) && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                        if !self.connection_state.remotes.is_empty() {
+                            if let Some(anchor) = self.connection_state.shift_anchor {
+                                if anchor == self.connection_state.selected_idx {
+                                    self.connection_state.shift_anchor = None;
+                                    self.connection_state.shift_active = false;
+                                } else if !self.connection_state.shift_active {
+                                    let start = anchor.min(self.connection_state.selected_idx);
+                                    let end = anchor.max(self.connection_state.selected_idx);
+                                    for i in start..=end {
+                                        if i < self.connection_state.remotes.len() {
+                                            let name = self.connection_state.remotes[i].clone();
+                                            if self.connection_state.selected_names.contains(&name) {
+                                                self.connection_state.selected_names.remove(&name);
+                                            } else {
+                                                self.connection_state.selected_names.insert(name);
+                                            }
+                                        }
+                                    }
+                                    self.connection_state.shift_active = true;
+                                } else {
+                                    self.connection_state.shift_anchor = None;
+                                    self.connection_state.shift_active = false;
+                                }
+                            } else {
+                                self.connection_state.shift_anchor = Some(self.connection_state.selected_idx);
+                                self.connection_state.shift_active = false;
+                            }
+                        }
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if !self.connection_state.remotes.is_empty() {
+                            if self.connection_state.selected_names.len() == self.connection_state.remotes.len() {
+                                self.connection_state.selected_names.clear();
+                            } else {
+                                self.connection_state.selected_names.clear();
+                                for r in &self.connection_state.remotes {
+                                    self.connection_state.selected_names.insert(r.clone());
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char('x') | KeyCode::Char('X') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        let selected: Vec<String> = if !self.connection_state.selected_names.is_empty() {
+                            self.connection_state.remotes.iter().filter(|r| self.connection_state.selected_names.contains(*r)).cloned().collect()
+                        } else if !self.connection_state.remotes.is_empty() {
+                            vec![self.connection_state.remotes[self.connection_state.selected_idx].clone()]
+                        } else {
+                            Vec::new()
+                        };
+
+                        if !selected.is_empty() {
+                            let default_export = crate::custom_config::TuiCustomConfig::load().remote_export_default_file;
+                            self.connection_state.edit_cursor_idx = default_export.chars().count();
+                            self.connection_state.wizard = ui::connection::WizardState::ExportConfigInput {
+                                selected_remotes: selected,
+                                input_buffer: default_export,
+                            };
                         }
                     }
                     KeyCode::Char('s') | KeyCode::Char('S') if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -2370,6 +2485,29 @@ impl App {
                     _ => {}
                 }
             }
+            ui::connection::WizardState::ExportConfigInput { selected_remotes, mut input_buffer } => {
+                let mut cursor = self.connection_state.edit_cursor_idx;
+                if handle_input_key(&key, &mut input_buffer, &mut cursor) {
+                    self.connection_state.edit_cursor_idx = cursor;
+                    self.connection_state.wizard = ui::connection::WizardState::ExportConfigInput {
+                        selected_remotes,
+                        input_buffer,
+                    };
+                } else {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.connection_state.wizard = ui::connection::WizardState::None;
+                        }
+                        KeyCode::Enter => {
+                            let path = input_buffer.trim().to_string();
+                            if !path.is_empty() {
+                                self.execute_export_config(selected_remotes, path, tx.clone()).await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 }
@@ -2459,6 +2597,57 @@ impl App {
             self.connection_state.info_message = Some(msg);
         }
         self.connection_state.wizard = ui::connection::WizardState::None;
+    }
+
+    pub(crate) async fn execute_export_config(
+        &mut self,
+        selected_remotes: Vec<String>,
+        path: String,
+        _tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
+        self.connection_state.wizard = ui::connection::WizardState::None;
+        let active_profile_path = self.config.get_active_profile_path();
+        
+        let content = match std::fs::read_to_string(&active_profile_path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.connection_state.error_message = Some(format!("Không thể đọc file cấu hình nguồn: {}", e));
+                return;
+            }
+        };
+
+        let sections = crate::app_config::parse_config(&content);
+        let mut exported_sections = Vec::new();
+
+        // Keep matching remotes
+        for section in sections {
+            match &section.name {
+                None => {
+                    exported_sections.push(section);
+                }
+                Some(name) => {
+                    if selected_remotes.contains(name) {
+                        exported_sections.push(section);
+                    }
+                }
+            }
+        }
+
+        let exported_content = crate::app_config::write_config(&exported_sections);
+        
+        let path_buf = std::path::PathBuf::from(&path);
+        if let Some(parent) = path_buf.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match std::fs::write(&path_buf, exported_content) {
+            Ok(_) => {
+                self.connection_state.info_message = Some(format!("Đã xuất {} cấu hình remote thành công sang:\n{}", selected_remotes.len(), path));
+            }
+            Err(e) => {
+                self.connection_state.error_message = Some(format!("Lỗi khi ghi file xuất cấu hình: {}", e));
+            }
+        }
     }
 }
 

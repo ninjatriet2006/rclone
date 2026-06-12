@@ -105,6 +105,10 @@ pub enum WizardState {
     ImportConfigInput {
         input_buffer: String,
     },
+    ExportConfigInput {
+        selected_remotes: Vec<String>,
+        input_buffer: String,
+    },
 }
 
 pub struct ConnectionState {
@@ -115,6 +119,9 @@ pub struct ConnectionState {
     pub info_message: Option<String>,
     pub remote_statuses: std::collections::HashMap<String, String>,
     pub edit_cursor_idx: usize,
+    pub selected_names: std::collections::HashSet<String>,
+    pub shift_anchor: Option<usize>,
+    pub shift_active: bool,
 }
 
 impl ConnectionState {
@@ -127,6 +134,9 @@ impl ConnectionState {
             info_message: None,
             remote_statuses: std::collections::HashMap::new(),
             edit_cursor_idx: 0,
+            selected_names: std::collections::HashSet::new(),
+            shift_anchor: None,
+            shift_active: false,
         }
     }
 
@@ -168,21 +178,39 @@ pub fn draw(
         .iter()
         .enumerate()
         .map(|(i, remote)| {
-            let style = if i == state.selected_idx && state.wizard == WizardState::None {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
+            let is_selected_item = state.selected_names.contains(remote);
+            let select_prefix = if is_selected_item {
+                "✔ "
+            } else {
+                "  "
+            };
+
+            let mut style = if i == state.selected_idx && state.wizard == WizardState::None {
+                if is_selected_item {
+                    Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                }
+            } else if is_selected_item {
+                Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
+
+            if state.shift_anchor == Some(i) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+                if i != state.selected_idx || state.wizard != WizardState::None {
+                    style = style.fg(Color::LightMagenta);
+                }
+            }
+
             let status = state
                 .remote_statuses
                 .get(remote)
                 .cloned()
                 .unwrap_or_else(|| crate::lang::translate("status_unchecked"));
             let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
-            let text = format!("  [{}] -> {:<25} | {}", r_type, remote, status);
+            let text = format!("{} [{}] -> {:<25} | {}", select_prefix, r_type, remote, status);
             ListItem::new(text).style(style)
         })
         .collect();
@@ -434,6 +462,9 @@ pub fn draw(
         WizardState::ImportConfigInput { input_buffer } => {
             draw_import_config_input_wizard(frame, input_buffer);
         }
+        WizardState::ExportConfigInput { input_buffer, .. } => {
+            draw_export_config_input_wizard(frame, input_buffer, state.edit_cursor_idx);
+        }
         WizardState::None => {}
     }
 
@@ -484,6 +515,42 @@ fn draw_import_config_input_wizard(frame: &mut Frame, input_buffer: &str) {
     let paragraph = Paragraph::new(text).block(block);
     frame.render_widget(paragraph, area);
 }
+
+fn draw_export_config_input_wizard(frame: &mut Frame, input_buffer: &str, cursor_idx: usize) {
+    let size = frame.size();
+    let area = centered_rect(65, 25, size);
+    frame.render_widget(Clear, area);
+
+    let mut spans = vec![Span::styled("> ", Style::default().fg(Color::Green))];
+    spans.extend(super::make_input_spans_with_cursor(input_buffer, cursor_idx, Color::White, Color::DarkGray));
+
+    let text = vec![
+        Line::from("Xuất danh sách các cấu hình remote đã chọn"),
+        Line::from(""),
+        Line::from("Nhập đường dẫn tuyệt đối tệp tin muốn xuất (mặc định tại Desktop):"),
+        Line::from(""),
+        Line::from(spans),
+        Line::from(""),
+        Line::from(Span::styled(
+            " [Enter] Xác nhận xuất | [Esc] Hủy bỏ ",
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Xuất cấu hình Remote (Alt+X) ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let paragraph = Paragraph::new(text).block(block);
+    frame.render_widget(paragraph, area);
+}
+
 
 fn draw_select_providers_wizard(
     frame: &mut Frame,

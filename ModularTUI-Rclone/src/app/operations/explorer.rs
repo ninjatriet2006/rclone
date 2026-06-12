@@ -476,7 +476,7 @@ impl App {
     }
 
     pub(crate) fn save_features_cache(&self) {
-        let cache_path = AppConfig::config_dir().join("features_cache.json");
+        let cache_path = std::path::PathBuf::from(crate::functions::app_config::TuiCustomConfig::load().features_cache_file_path);
         if let Some(parent) = cache_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

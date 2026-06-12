@@ -114,7 +114,7 @@ menu_welcome: "Chào mừng đến với Rclone Clone TUI! Sử dụng phím Mũ
 menu_title: " MENU CHÍNH "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Thêm|[Alt+I]Nhập|[Alt+E]Sửa|[Delete]Xóa|[Alt+S]Sắp xếp|[Alt+↑/↓]Thứ tự|[?]Tính năng|[Mũi tên]Chọn|[ESC]Menu"
+conn_help_navigation: "[Insert]Thêm|[Alt+I]Nhập|[Alt+E]Sửa|[Delete]Xóa|[Alt+S]Sắp|[Alt+↑/↓]Thứ tự|[Space/Alt+V]Chọn|[Shift+V]Vùng|[Ctrl+A]Hết|[Alt+X]Xuất|[?]Tính năng|[ESC]Menu"
 conn_title: " CLOUD REMOTES (DANH SÁCH KẾT NỐI) "
 conn_error_title: " LỖI "
 conn_info_title: " THÔNG BÁO "
@@ -430,7 +430,7 @@ menu_welcome: "Welcome to Rclone Clone TUI! Use Up/Down arrows to navigate and E
 menu_title: " MAIN MENU "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Add|[Alt+I]Import|[Alt+E]Edit|[Delete]Delete|[Alt+S]Sort|[Alt+↑/↓]Reorder|[?]Features|[Arrows]Select|[ESC]Menu"
+conn_help_navigation: "[Insert]Add|[Alt+I]Import|[Alt+E]Edit|[Delete]Delete|[Alt+S]Sort|[Alt+↑/↓]Reorder|[Space/Alt+V]Sel|[Shift+V]Range|[Ctrl+A]All|[Alt+X]Export|[?]Feat|[ESC]Menu"
 conn_title: " CLOUD REMOTES "
 conn_error_title: " ERROR "
 conn_info_title: " INFO "

@@ -3,7 +3,7 @@ use rusqlite::{Connection, params};
 use super::{ActiveOperation, FileTask, TaskStatus};
 
 fn get_db_path() -> PathBuf {
-    crate::app_config::AppConfig::config_dir().join("active_ops.db")
+    PathBuf::from(crate::custom_config::TuiCustomConfig::load().db_file_path)
 }
 
 fn get_connection() -> Result<Connection, rusqlite::Error> {

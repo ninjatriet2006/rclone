@@ -32,12 +32,18 @@ pub struct ExplorerPane {
 
 impl ExplorerPane {
     pub fn new(remote: &str) -> Self {
+        let config = crate::custom_config::TuiCustomConfig::load();
         ExplorerPane {
             remote: remote.to_string(),
             path: if remote.is_empty() {
-                crate::app_config::get_home_dir()
+                let local_dir = config.default_local_dir.trim();
+                if local_dir.is_empty() {
+                    crate::app_config::get_home_dir()
+                } else {
+                    local_dir.to_string()
+                }
             } else {
-                "".to_string()
+                config.default_remote_dir.clone()
             },
             items: Vec::new(),
             selected_idx: 0,
