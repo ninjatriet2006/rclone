@@ -912,16 +912,67 @@ pub fn translate_field(name: &str, desc: &str) -> (String, String) {
     (friendly_name, friendly_desc)
 }
 
-pub fn is_field_required(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldReqState {
+    Required,
+    MutualUnentered,
+    Optional,
+}
+
+pub struct MutualGroup {
+    pub fields: &'static [&'static str],
+}
+
+pub const MUTUAL_GROUPS: &[MutualGroup] = &[
+    MutualGroup {
+        fields: &["token", "client_id", "service_account_file", "service_account_credentials"],
+    },
+    MutualGroup {
+        fields: &["pass", "key_file", "key_use_agent"],
+    },
+    MutualGroup {
+        fields: &["bearer_token", "pass"],
+    },
+    MutualGroup {
+        fields: &["access_key_id", "env_auth", "iam", "anon"],
+    },
+    MutualGroup {
+        fields: &["sas_url", "account", "key", "service_principal_file"],
+    },
+];
+
+pub fn get_mutual_group_info(
+    name: &str,
+    fields: &[(String, String, String, Vec<(String, String)>, bool)],
+) -> Option<(&'static MutualGroup, Vec<String>)> {
+    let name_lower = name.to_lowercase();
+    for group in MUTUAL_GROUPS {
+        if group.fields.contains(&name_lower.as_str()) {
+            let present_fields_in_group: Vec<String> = group.fields.iter()
+                .filter(|&&f_name| fields.iter().any(|f| f.0.to_lowercase() == f_name))
+                .map(|&f_name| {
+                    let (friendly_name, _) = translate_field(f_name, "");
+                    friendly_name
+                })
+                .collect();
+            if present_fields_in_group.len() >= 2 {
+                return Some((group, present_fields_in_group));
+            }
+        }
+    }
+    None
+}
+
+pub fn get_field_req_state(
     name: &str,
     fields: &[(String, String, String, Vec<(String, String)>, bool)],
     selected_idx: usize,
     is_editing: bool,
     input_buffer: &str,
-) -> bool {
+) -> FieldReqState {
     let name_lower = name.to_lowercase();
     if name_lower == "_remote_name" {
-        return true;
+        return FieldReqState::Required;
     }
 
     // Helper to get the current active value of a field in the wizard
@@ -940,50 +991,44 @@ pub fn is_field_required(
 
     let required_by_default = fields.iter().find(|f| f.0.to_lowercase() == name_lower).map(|f| f.4).unwrap_or(false);
 
-    // Helper to check if any service account fields are populated
-    let has_service_account = !get_val("service_account_file").trim().is_empty()
-        || !get_val("service_account_credentials").trim().is_empty();
+    // Check mutual groups
+    for group in MUTUAL_GROUPS {
+        if group.fields.contains(&name_lower.as_str()) {
+            let present_fields_in_group: Vec<&str> = group.fields.iter()
+                .filter(|&&f_name| fields.iter().any(|f| f.0.to_lowercase() == f_name))
+                .copied()
+                .collect();
 
-    // Mutual exclusivity groups:
-    // 1. token vs client_id
-    if name_lower == "token" {
-        if has_service_account {
-            return false;
+            if present_fields_in_group.len() >= 2 {
+                let any_populated = present_fields_in_group.iter().any(|&f_name| {
+                    !get_val(f_name).trim().is_empty()
+                });
+
+                if any_populated {
+                    return FieldReqState::Optional;
+                } else {
+                    return FieldReqState::MutualUnentered;
+                }
+            }
         }
-        let has_client_id = !get_val("client_id").trim().is_empty();
-        let has_token = !get_val("token").trim().is_empty();
-        return !has_client_id && !has_token;
-    }
-    if name_lower == "client_id" || name_lower == "client_secret" {
-        return false;
     }
 
-    // 2. service_account_file vs service_account_credentials
-    if name_lower == "service_account_file" {
-        let has_token = !get_val("token").trim().is_empty();
-        let has_client_id = !get_val("client_id").trim().is_empty();
-        if has_token || has_client_id {
-            return false;
-        }
-        let has_creds = !get_val("service_account_credentials").trim().is_empty();
-        let has_file = !get_val("service_account_file").trim().is_empty();
-        return !has_creds && !has_file;
+    if required_by_default {
+        FieldReqState::Required
+    } else {
+        FieldReqState::Optional
     }
-    if name_lower == "service_account_credentials" {
-        return false;
-    }
+}
 
-    // 3. pass vs key_file / key_use_agent
-    if name_lower == "pass" {
-        let has_key = !get_val("key_file").trim().is_empty() || get_val("key_use_agent").trim() == "true";
-        let has_pass = !get_val("pass").trim().is_empty();
-        return !has_key && !has_pass;
-    }
-    if name_lower == "key_file" || name_lower == "key_use_agent" {
-        return false;
-    }
-
-    required_by_default
+pub fn is_field_required(
+    name: &str,
+    fields: &[(String, String, String, Vec<(String, String)>, bool)],
+    selected_idx: usize,
+    is_editing: bool,
+    input_buffer: &str,
+) -> bool {
+    let state = get_field_req_state(name, fields, selected_idx, is_editing, input_buffer);
+    matches!(state, FieldReqState::Required | FieldReqState::MutualUnentered)
 }
 
 pub fn is_basic_field(name: &str, required: bool) -> bool {
@@ -1127,17 +1172,24 @@ fn draw_advanced_setup_wizard(
                     Color::Black
                 };
 
-                let is_req = is_field_required(name, fields, selected_field_idx, is_editing, input_buffer);
-                let label_fg = if is_req {
-                    Color::Red
-                } else {
-                    fg
+                let req_state = get_field_req_state(name, fields, selected_field_idx, is_editing, input_buffer);
+                let label_fg = match req_state {
+                    FieldReqState::Required => Color::Red,
+                    FieldReqState::MutualUnentered => Color::Yellow,
+                    FieldReqState::Optional => fg,
                 };
+
+                let mut suffix_str = String::new();
+                if req_state == FieldReqState::MutualUnentered {
+                    if let Some((_, related)) = get_mutual_group_info(name, fields) {
+                        suffix_str = format!(" (1 trong {})", related.len());
+                    }
+                }
 
                 let mut spans = vec![
                     Span::styled(cursor, Style::default().fg(Color::Red)),
                     Span::styled(
-                        format!("{}: ", friendly_name),
+                        format!("{}{}: ", friendly_name, suffix_str),
                         Style::default().fg(label_fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
                 ];
@@ -1190,16 +1242,35 @@ fn draw_advanced_setup_wizard(
                 }
                 Line::from(spans)
             } else {
-                let is_req = is_field_required(name, fields, selected_field_idx, is_editing, input_buffer);
-                let (prefix, label_style) = if is_req {
-                    ("  * ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                } else {
-                    ("    ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                let req_state = get_field_req_state(name, fields, selected_field_idx, is_editing, input_buffer);
+                let mut suffix_str = String::new();
+                if req_state == FieldReqState::MutualUnentered {
+                    if let Some((_, related)) = get_mutual_group_info(name, fields) {
+                        suffix_str = format!(" (1 trong {})", related.len());
+                    }
+                }
+
+                let (prefix, prefix_color, label_style) = match req_state {
+                    FieldReqState::Required => (
+                        "  * ",
+                        Color::Red,
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
+                    FieldReqState::MutualUnentered => (
+                        "  * ",
+                        Color::Yellow,
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                    FieldReqState::Optional => (
+                        "    ",
+                        Color::White,
+                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    ),
                 };
                 Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Red)),
+                    Span::styled(prefix, Style::default().fg(prefix_color)),
                     Span::styled(
-                        format!("{}: ", friendly_name),
+                        format!("{}{}: ", friendly_name, suffix_str),
                         label_style,
                     ),
                     Span::styled(display_val, Style::default().fg(Color::White)),
@@ -1281,9 +1352,28 @@ fn draw_advanced_setup_wizard(
     frame.render_widget(list, inner_chunks[2]);
 
     // Draw the description box
-    let current_desc = filtered_fields.get(selected_field_idx)
+    let mut current_desc = filtered_fields.get(selected_field_idx)
         .map(|f| translate_field(&f.0, &f.1).1)
         .unwrap_or_default();
+
+    if let Some(field_tuple) = filtered_fields.get(selected_field_idx) {
+        let name = &field_tuple.0;
+        if let Some((_, related)) = get_mutual_group_info(name, fields) {
+            let is_vi = crate::lang::translate("menu_welcome").contains("Chào mừng");
+            let note = if is_vi {
+                format!(
+                    "\n\n[LƯU Ý: Trường này thuộc nhóm liên kết. Bạn chỉ cần nhập 1 trong các trường: {}.]",
+                    related.join(", ")
+                )
+            } else {
+                format!(
+                    "\n\n[NOTE: This field belongs to a linked group. You only need to enter 1 of: {}.]",
+                    related.join(", ")
+                )
+            };
+            current_desc.push_str(&note);
+        }
+    }
 
     frame.render_widget(
         Paragraph::new("─".repeat(inner_chunks[3].width as usize))
@@ -1425,17 +1515,24 @@ fn draw_edit_setup_wizard(
                     Color::Black
                 };
 
-                let is_req = is_field_required(name, fields, selected_idx, is_editing, input_buffer);
-                let label_fg = if is_req {
-                    Color::Red
-                } else {
-                    fg
+                let req_state = get_field_req_state(name, fields, selected_idx, is_editing, input_buffer);
+                let label_fg = match req_state {
+                    FieldReqState::Required => Color::Red,
+                    FieldReqState::MutualUnentered => Color::Yellow,
+                    FieldReqState::Optional => fg,
                 };
+
+                let mut suffix_str = String::new();
+                if req_state == FieldReqState::MutualUnentered {
+                    if let Some((_, related)) = get_mutual_group_info(name, fields) {
+                        suffix_str = format!(" (1 trong {})", related.len());
+                    }
+                }
 
                 let mut spans = vec![
                     Span::styled(cursor, Style::default().fg(Color::Red)),
                     Span::styled(
-                        format!("{}: ", friendly_name),
+                        format!("{}{}: ", friendly_name, suffix_str),
                         Style::default().fg(label_fg).bg(bg).add_modifier(Modifier::BOLD),
                     ),
                 ];
@@ -1488,16 +1585,35 @@ fn draw_edit_setup_wizard(
                 }
                 Line::from(spans)
             } else {
-                let is_req = is_field_required(name, fields, selected_idx, is_editing, input_buffer);
-                let (prefix, label_style) = if is_req {
-                    ("  * ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                } else {
-                    ("    ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                let req_state = get_field_req_state(name, fields, selected_idx, is_editing, input_buffer);
+                let mut suffix_str = String::new();
+                if req_state == FieldReqState::MutualUnentered {
+                    if let Some((_, related)) = get_mutual_group_info(name, fields) {
+                        suffix_str = format!(" (1 trong {})", related.len());
+                    }
+                }
+
+                let (prefix, prefix_color, label_style) = match req_state {
+                    FieldReqState::Required => (
+                        "  * ",
+                        Color::Red,
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
+                    FieldReqState::MutualUnentered => (
+                        "  * ",
+                        Color::Yellow,
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                    FieldReqState::Optional => (
+                        "    ",
+                        Color::White,
+                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    ),
                 };
                 Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Red)),
+                    Span::styled(prefix, Style::default().fg(prefix_color)),
                     Span::styled(
-                        format!("{}: ", friendly_name),
+                        format!("{}{}: ", friendly_name, suffix_str),
                         label_style,
                     ),
                     Span::styled(display_val, Style::default().fg(Color::White)),
@@ -1579,9 +1695,28 @@ fn draw_edit_setup_wizard(
     frame.render_widget(list, inner_chunks[2]);
 
     // Draw the description box
-    let current_desc = filtered_fields.get(selected_idx)
+    let mut current_desc = filtered_fields.get(selected_idx)
         .map(|f| translate_field(&f.0, &f.1).1)
         .unwrap_or_default();
+
+    if let Some(field_tuple) = filtered_fields.get(selected_idx) {
+        let name = &field_tuple.0;
+        if let Some((_, related)) = get_mutual_group_info(name, fields) {
+            let is_vi = crate::lang::translate("menu_welcome").contains("Chào mừng");
+            let note = if is_vi {
+                format!(
+                    "\n\n[LƯU Ý: Trường này thuộc nhóm liên kết. Bạn chỉ cần nhập 1 trong các trường: {}.]",
+                    related.join(", ")
+                )
+            } else {
+                format!(
+                    "\n\n[NOTE: This field belongs to a linked group. You only need to enter 1 of: {}.]",
+                    related.join(", ")
+                )
+            };
+            current_desc.push_str(&note);
+        }
+    }
 
     frame.render_widget(
         Paragraph::new("─".repeat(inner_chunks[3].width as usize))

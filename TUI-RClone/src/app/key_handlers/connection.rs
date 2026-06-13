@@ -408,6 +408,27 @@ impl App {
                                             }
                                         }
 
+                                        // Bổ sung các tham số thực tế có trong config của remote mà không nằm trong danh sách Options của provider (vd: token)
+                                        if !fields.is_empty() {
+                                            for (k, v) in current_config {
+                                                if k != "type" && !fields.iter().any(|f: &(String, String, String, Vec<(String, String)>, bool)| f.0 == *k) {
+                                                    let val_str = match v {
+                                                        Value::String(s) => s.clone(),
+                                                        Value::Number(num) => num.to_string(),
+                                                        Value::Bool(b) => b.to_string(),
+                                                        _ => v.to_string(),
+                                                    };
+                                                    fields.push((
+                                                        k.clone(),
+                                                        k.clone(),
+                                                        val_str,
+                                                        Vec::new(),
+                                                        false,
+                                                    ));
+                                                }
+                                            }
+                                        }
+
                                         // Dự phòng trong trường hợp không truy vấn được config/providers
                                         if fields.is_empty() {
                                             for (k, v) in current_config {
