@@ -8,12 +8,7 @@ lazy_static! {
 }
 
 /// Khởi tạo thư mục và tệp ngôn ngữ mặc định nếu chưa tồn tại
-pub fn init_languages() {
-    let lang_dir = crate::app_config::AppConfig::config_dir().join("lang");
-    if !lang_dir.exists() {
-        let _ = fs::create_dir_all(&lang_dir);
-    }
-    let default_vn = r#"# Rclone-TUI Vietnamese Translations
+const DEFAULT_VN: &str = r#"# Rclone-TUI Vietnamese Translations
 unikey_tip: "💡 Mẹo: Nếu Unikey tự chuyển dấu sai (ví dụ Telex), hãy tắt bộ gõ tiếng Việt (chuyển sang chữ E) trong hệ điều hành."
 remote: "Remote nguồn cần mã hóa (ví dụ: Telebox:ThuMucGoc)"
 remote_friendly: "Remote nguồn"
@@ -412,9 +407,79 @@ acl: "Chính sách kiểm soát quyền truy cập mặc định (ACL) cho các 
 acl_friendly: "Quyền truy cập ACL"
 storage_class: "Lớp lưu trữ của các tệp tin trên hệ thống (ví dụ: STANDARD, COLD, ARCHIVE)."
 storage_class_friendly: "Lớp lưu trữ (Storage Class)"
+auth_url: "URL của máy chủ xác thực. Để trống để sử dụng mặc định của nhà cung cấp."
+auth_url_friendly: "URL xác thực (Auth URL)"
+token_url: "URL của máy chủ cấp token. Để trống để sử dụng mặc định của nhà cung cấp."
+token_url_friendly: "URL lấy Token (Token URL)"
+chunk_size: "Kích thước phân đoạn tải lên. Các tệp lớn hơn kích thước này sẽ được chia nhỏ để tải lên."
+chunk_size_friendly: "Kích thước phân đoạn tải"
+impersonate: "Mạo danh người dùng này khi thực hiện các thao tác bằng tài khoản Business."
+impersonate_friendly: "Mạo danh tài khoản"
+shared_files: "Chỉ hiển thị và hoạt động trên các tệp được chia sẻ đơn lẻ (chỉ đọc)."
+shared_files_friendly: "Chỉ hiển thị tệp chia sẻ"
+shared_folders: "Hoạt động trên các thư mục được chia sẻ (chỉ đọc hoặc gán quyền)."
+shared_folders_friendly: "Thư mục chia sẻ"
+pacer_min_sleep: "Thời gian chờ tối thiểu giữa các yêu cầu gọi API (tránh lỗi quá tải)."
+pacer_min_sleep_friendly: "Thời gian nghỉ API tối thiểu"
+encoding: "Cấu hình mã hóa ký tự (encoding) cho backend."
+encoding_friendly: "Mã hóa ký tự backend"
+root_namespace: "ID không gian tên (namespace ID) dùng làm gốc cho tất cả các đường dẫn."
+root_namespace_friendly: "ID không gian tên gốc"
+export_formats: "Danh sách định dạng ưu tiên để xuất các tệp tin đặc biệt (ví dụ: html, md)."
+export_formats_friendly: "Định dạng xuất file"
+skip_exports: "Bỏ qua các tệp có thể xuất được (chúng sẽ ẩn đi đối với rclone)."
+skip_exports_friendly: "Bỏ qua file có thể xuất"
+show_all_exports: "Hiển thị tất cả các tệp có thể xuất được trong danh sách liệt kê."
+show_all_exports_friendly: "Hiển thị mọi file xuất được"
+batch_mode: "Chế độ truyền tải dữ liệu hàng loạt (off: tắt, sync: đồng bộ, async: không đồng bộ)."
+batch_mode_friendly: "Chế độ truyền tải hàng loạt"
+batch_size: "Số lượng tệp tối đa trong một lô (batch) tải lên. Giúp tăng tốc khi tải nhiều tệp nhỏ."
+batch_size_friendly: "Số lượng tệp mỗi lô"
+batch_timeout: "Thời gian chờ tối đa cho một lô nhàn rỗi trước khi thực hiện tải lên."
+batch_timeout_friendly: "Thời gian chờ gom lô"
+batch_commit_timeout: "Thời gian tối đa chờ gom lô hoàn tất (không còn sử dụng ở bản mới)."
+batch_commit_timeout_friendly: "Thời gian chờ xác nhận lô"
+acknowledged_abuse: "Chấp nhận cảnh báo lạm dụng/độc hại từ Google để tiếp tục tải xuống tệp tin."
+acknowledged_abuse_friendly: "Chấp nhận cảnh báo lạm dụng"
+alternate_members: "Sử dụng danh sách thành viên thay thế."
+alternate_members_friendly: "Thành viên thay thế"
+ask_password: "Cho phép hỏi mật khẩu khi cần thiết."
+ask_password_friendly: "Hỏi mật khẩu khi cần"
+copy_shortcut_contains: "Sao chép tệp shortcut thay vì dereference."
+copy_shortcut_contains_friendly: "Sao chép Shortcut"
+disable_http2: "Vô hiệu hóa giao thức HTTP/2 cho kết nối này."
+disable_http2_friendly: "Tắt HTTP/2"
+env_auth: "Lấy thông tin xác thực từ biến môi trường."
+env_auth_friendly: "Xác thực môi trường"
+expose_gid: "Hiển thị GID trong siêu dữ liệu file."
+expose_gid_friendly: "Hiển thị GID"
+list_chunk: "Kích thước gói liệt kê danh sách tệp tin (list chunk size)."
+list_chunk_friendly: "Kích thước gói danh sách"
+pacer_burst: "Số lượng yêu cầu API tối đa được phép thực hiện dồn dập mà không cần tạm dừng."
+pacer_burst_friendly: "Số lượng API dồn dập"
+shared_with_me: "Chỉ hiển thị các tệp tin/thư mục được chia sẻ với tôi (Shared with me)."
+shared_with_me_friendly: "Chỉ hiển thị tệp chia sẻ với tôi"
+show_all_gdocs: "Hiển thị tất cả tài liệu Google (bao gồm cả loại không thể xuất)."
+show_all_gdocs_friendly: "Hiển thị mọi Google Docs"
+skip_gdocs: "Bỏ qua và ẩn tất cả tài liệu Google trong danh sách."
+skip_gdocs_friendly: "Bỏ qua Google Docs"
+starred_only: "Chỉ hiển thị các tệp tin/thư mục được gắn dấu sao (Starred)."
+starred_only_friendly: "Chỉ hiển thị mục gắn sao"
+stop_on_download_limit: "Dừng tác vụ ngay lập tức nếu đạt giới hạn tải xuống hàng ngày của Google Drive (10 TiB)."
+stop_on_download_limit_friendly: "Dừng khi hết hạn mức tải"
+stop_on_upload_limit: "Dừng tác vụ ngay lập tức nếu đạt giới hạn tải lên hàng ngày của Google Drive (750 GiB)."
+stop_on_upload_limit_friendly: "Dừng khi hết hạn mức tải lên"
+use_created_date: "Sử dụng ngày tạo tệp tin thay vì ngày sửa đổi gần nhất."
+use_created_date_friendly: "Sử dụng ngày tạo file"
+use_shared_date: "Sử dụng ngày tệp được chia sẻ thay vì ngày sửa đổi."
+use_shared_date_friendly: "Sử dụng ngày được chia sẻ"
+use_trash: "Di chuyển tệp bị xóa vào Thùng rác (Trash) thay vì xóa vĩnh viễn."
+use_trash_friendly: "Sử dụng Thùng rác"
+v2_download_min_size: "Kích thước tệp tối thiểu để chuyển sang dùng API v2 để tải xuống."
+v2_download_min_size_friendly: "Kích thước tối thiểu tải API v2"
 "#;
 
-    let default_eng = r#"# Rclone-TUI English Translations
+const DEFAULT_ENG: &str = r#"# Rclone-TUI English Translations
 unikey_tip: "💡 Tip: If your IME interferes with typing, temporarily switch your OS layout to English mode."
 remote: "Remote to encrypt/decrypt. Normally should contain a ':' and a path, e.g. \"myremote:path/to/dir\""
 filename_encryption: "How to encrypt the filenames."
@@ -792,13 +857,89 @@ acl: "Canned ACL used when creating buckets and storing objects."
 acl_friendly: "Access Control List (ACL)"
 storage_class: "The storage class to use when storing new objects."
 storage_class_friendly: "Storage Class"
+auth_url: "Auth server URL. Leave blank to use the provider defaults."
+auth_url_friendly: "Auth Server URL"
+token_url: "Token server url. Leave blank to use the provider defaults."
+token_url_friendly: "Token Server URL"
+chunk_size: "Upload chunk size. Any files larger than this will be uploaded in chunks of this size."
+chunk_size_friendly: "Upload Chunk Size"
+impersonate: "Impersonate this user when using a business account."
+impersonate_friendly: "Impersonate User"
+shared_files: "Instructs rclone to work on individual shared files."
+shared_files_friendly: "Show Shared Files"
+shared_folders: "Instructs rclone to work on shared folders."
+shared_folders_friendly: "Shared Folders Mode"
+pacer_min_sleep: "Minimum time to sleep between API calls."
+pacer_min_sleep_friendly: "Minimum Pacer Sleep Time"
+encoding: "The encoding for the backend."
+encoding_friendly: "Backend Encoding"
+root_namespace: "Specify a different Dropbox namespace ID to use as the root for all paths."
+root_namespace_friendly: "Root Namespace ID"
+export_formats: "Comma separated list of preferred formats for exporting files."
+export_formats_friendly: "Export Formats"
+skip_exports: "Skip exportable files in all listings."
+skip_exports_friendly: "Skip Exportable Files"
+show_all_exports: "Show all exportable files in listings."
+show_all_exports_friendly: "Show All Exportable Files"
+batch_mode: "Upload file batching mode (off, sync, async)."
+batch_mode_friendly: "Upload Batch Mode"
+batch_size: "Max number of files in upload batch."
+batch_size_friendly: "Upload Batch Size"
+batch_timeout: "Max time to allow an idle upload batch before uploading."
+batch_timeout_friendly: "Upload Batch Timeout"
+batch_commit_timeout: "Max time to wait for a batch to finish committing."
+batch_commit_timeout_friendly: "Batch Commit Timeout"
+acknowledged_abuse: "Acknowledge to download files blocked by Google for abuse."
+acknowledged_abuse_friendly: "Acknowledge Abuse"
+alternate_members: "Use alternate members list."
+alternate_members_friendly: "Use Alternate Members"
+ask_password: "Allow asking for FTP password when needed."
+ask_password_friendly: "Ask Password"
+copy_shortcut_contains: "Copy shortcut files instead of dereferencing them."
+copy_shortcut_contains_friendly: "Copy Shortcut Files"
+disable_http2: "Disable HTTP/2 protocol for this connection."
+disable_http2_friendly: "Disable HTTP/2"
+env_auth: "Get credentials from environment variables."
+env_auth_friendly: "Environment Auth"
+expose_gid: "Expose GID in file metadata."
+expose_gid_friendly: "Expose GID"
+list_chunk: "Size of list chunks."
+list_chunk_friendly: "List Chunk Size"
+pacer_burst: "Number of API calls to allow without sleeping."
+pacer_burst_friendly: "Pacer Burst Count"
+shared_with_me: "Only show files that are shared with me."
+shared_with_me_friendly: "Shared with Me Only"
+show_all_gdocs: "Show all Google Docs including non-exportable ones in listings."
+show_all_gdocs_friendly: "Show All Google Docs"
+skip_gdocs: "Skip Google Documents in all listings."
+skip_gdocs_friendly: "Skip Google Documents"
+starred_only: "Only show files that are starred."
+starred_only_friendly: "Starred Only"
+stop_on_download_limit: "Make download limit errors be fatal."
+stop_on_download_limit_friendly: "Stop on Download Limit"
+stop_on_upload_limit: "Make upload limit errors be fatal."
+stop_on_upload_limit_friendly: "Stop on Upload Limit"
+use_created_date: "Use file created date instead of modified date."
+use_created_date_friendly: "Use Created Date"
+use_shared_date: "Use date file was shared instead of modified date."
+use_shared_date_friendly: "Use Shared Date"
+use_trash: "Send files to the trash instead of deleting permanently."
+use_trash_friendly: "Use Trash Bin"
+v2_download_min_size: "If Object's are greater, use drive v2 API to download."
+v2_download_min_size_friendly: "V2 Download Min Size"
 "#;
 
+pub fn init_languages() {
+    let lang_dir = crate::app_config::AppConfig::config_dir().join("lang");
+    if !lang_dir.exists() {
+        let _ = fs::create_dir_all(&lang_dir);
+    }
+
     let vn_path = lang_dir.join("vn.yaml");
-    merge_missing_keys(&vn_path, default_vn);
+    merge_missing_keys(&vn_path, DEFAULT_VN);
 
     let eng_path = lang_dir.join("eng.yaml");
-    merge_missing_keys(&eng_path, default_eng);
+    merge_missing_keys(&eng_path, DEFAULT_ENG);
 }
 
 fn merge_missing_keys(path: &std::path::Path, defaults: &str) {
@@ -835,6 +976,13 @@ fn merge_missing_keys(path: &std::path::Path, defaults: &str) {
 pub fn load_translation(lang_name: &str) {
     let lang_dir = crate::app_config::AppConfig::config_dir().join("lang");
     let file_path = lang_dir.join(format!("{}.yaml", lang_name));
+
+    // Tự động kiểm tra và cập nhật các khoá thiếu từ bản dịch mặc định trước khi load
+    if lang_name == "vn" {
+        merge_missing_keys(&file_path, DEFAULT_VN);
+    } else if lang_name == "eng" {
+        merge_missing_keys(&file_path, DEFAULT_ENG);
+    }
 
     if let Ok(content) = fs::read_to_string(&file_path) {
         if let Ok(map) = serde_yaml::from_str::<HashMap<String, String>>(&content) {
