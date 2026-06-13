@@ -1168,7 +1168,10 @@ impl App {
                             "name": remote_name,
                             "type": provider,
                             "parameters": params,
-                            "obscure": true
+                            "obscure": true,
+                            "opt": {
+                                "nonInteractive": true
+                            }
                         })
                         .to_string();
 
@@ -1649,7 +1652,10 @@ impl App {
                                     "name": remote_name,
                                     "type": provider,
                                     "parameters": params,
-                                    "obscure": true
+                                    "obscure": true,
+                                    "opt": {
+                                        "nonInteractive": true
+                                    }
                                 })
                                 .to_string();
 
@@ -1704,7 +1710,10 @@ impl App {
                             "name": remote_name,
                             "type": provider,
                             "parameters": params,
-                            "obscure": true
+                            "obscure": true,
+                            "opt": {
+                                "nonInteractive": true
+                            }
                             })
                             .to_string();
 
@@ -2094,7 +2103,10 @@ impl App {
                                         "name": new_remote_name,
                                         "type": provider,
                                         "parameters": params,
-                                        "obscure": true
+                                        "obscure": true,
+                                        "opt": {
+                                            "nonInteractive": true
+                                        }
                                     })
                                     .to_string();
 
@@ -2124,7 +2136,10 @@ impl App {
                                     let rclone_param = json!({
                                         "name": remote_name,
                                         "parameters": params,
-                                        "obscure": true
+                                        "obscure": true,
+                                        "opt": {
+                                            "nonInteractive": true
+                                        }
                                     })
                                     .to_string();
 
@@ -2186,7 +2201,10 @@ impl App {
                                     "name": new_remote_name,
                                     "type": provider,
                                     "parameters": params,
-                                    "obscure": true
+                                    "obscure": true,
+                                    "opt": {
+                                        "nonInteractive": true
+                                    }
                                 })
                                 .to_string();
 
@@ -2216,7 +2234,10 @@ impl App {
                                 let rclone_param = json!({
                                     "name": remote_name,
                                     "parameters": params,
-                                    "obscure": true
+                                    "obscure": true,
+                                    "opt": {
+                                        "nonInteractive": true
+                                    }
                                 })
                                 .to_string();
 
@@ -2599,6 +2620,9 @@ impl App {
                 "name": final_name,
                 "type": remote.remote_type,
                 "parameters": Value::Object(remote.parameters),
+                "opt": {
+                    "nonInteractive": true
+                }
             }).to_string();
 
             match rclone::rpc_async("config/create".to_string(), create_param).await {
