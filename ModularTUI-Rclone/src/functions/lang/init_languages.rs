@@ -34,6 +34,7 @@ status_online: "🟢 Trực tuyến"
 status_online_loading: "🟢 Trực tuyến (Đang tính dung lượng...)"
 status_online_unlimited: "🟢 Trực tuyến (Không giới hạn)"
 status_unchecked: "Chưa kiểm tra"
+status_checking: "Đang kiểm tra..."
 confirm_delete_remote: "Bạn có chắc chắn muốn xóa cấu hình remote '{}'?\n\n[Enter / Y] Xác nhận xóa\n[Esc / N] Hủy bỏ"
 confirm_delete_remote_title: " XÁC NHẬN XÓA REMOTE "
 confirm_delete_file: "Bạn có chắc chắn muốn xóa tệp/thư mục '{}'?\nLưu ý: Thư mục sẽ bị xóa vĩnh viễn cùng tất cả nội dung bên trong!\n\n[Enter / Y] Xác nhận xóa | [Esc / N] Hủy bỏ"
@@ -114,7 +115,7 @@ menu_welcome: "Chào mừng đến với Rclone Clone TUI! Sử dụng phím Mũ
 menu_title: " MENU CHÍNH "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Thêm|[Alt+I]Nhập|[Alt+E]Sửa|[Delete]Xóa|[Alt+S]Sắp|[Alt+↑/↓]Thứ tự|[Space/Alt+V]Chọn|[Shift+V]Vùng|[Ctrl+A]Hết|[Alt+X]Xuất|[?]Tính năng|[ESC]Menu"
+conn_help_navigation: "[Insert]Thêm|[Alt+I]Nhập|[Alt+E]Sửa|[Delete]Xóa|[Alt+S]Sắp|[Alt+↑/↓]Thứ tự|[Space/Alt+V]Chọn|[Shift+V]Vùng|[Ctrl+A]Hết|[Alt+X]Xuất|[Alt+C]K.tra|[?]Tính năng|[ESC]Menu"
 conn_title: " CLOUD REMOTES (DANH SÁCH KẾT NỐI) "
 conn_error_title: " LỖI "
 conn_info_title: " THÔNG BÁO "
@@ -350,6 +351,7 @@ status_online: "🟢 Online"
 status_online_loading: "🟢 Online (Calculating capacity...)"
 status_online_unlimited: "🟢 Online (Unlimited)"
 status_unchecked: "Unchecked"
+status_checking: "Checking..."
 confirm_delete_remote: "Are you sure you want to delete remote configuration '{}'?\n\n[Enter / Y] Confirm delete\n[Esc / N] Cancel"
 confirm_delete_remote_title: " CONFIRM DELETE REMOTE "
 confirm_delete_file: "Are you sure you want to delete '{}'?\nNote: The folder and all its contents will be permanently deleted!\n\n[Enter / Y] Confirm | [Esc / N] Cancel"
@@ -430,7 +432,7 @@ menu_welcome: "Welcome to Rclone Clone TUI! Use Up/Down arrows to navigate and E
 menu_title: " MAIN MENU "
 
 # Connection Manager
-conn_help_navigation: "[Insert]Add|[Alt+I]Import|[Alt+E]Edit|[Delete]Delete|[Alt+S]Sort|[Alt+↑/↓]Reorder|[Space/Alt+V]Sel|[Shift+V]Range|[Ctrl+A]All|[Alt+X]Export|[?]Feat|[ESC]Menu"
+conn_help_navigation: "[Insert]Add|[Alt+I]Import|[Alt+E]Edit|[Delete]Delete|[Alt+S]Sort|[Alt+↑/↓]Reorder|[Space/Alt+V]Sel|[Shift+V]Range|[Ctrl+A]All|[Alt+X]Export|[Alt+C]Check|[?]Feat|[ESC]Menu"
 conn_title: " CLOUD REMOTES "
 conn_error_title: " ERROR "
 conn_info_title: " INFO "

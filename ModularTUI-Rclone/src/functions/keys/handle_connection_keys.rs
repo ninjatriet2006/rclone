@@ -149,6 +149,25 @@ pub async fn handle_connection_keys(
                             }
                         }
                     }
+                    KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        let selected: Vec<String> = if !app.connection_state.selected_names.is_empty() {
+                            app.connection_state.remotes.iter().filter(|r| app.connection_state.selected_names.contains(*r)).cloned().collect()
+                        } else if !app.connection_state.remotes.is_empty() {
+                            vec![app.connection_state.remotes[app.connection_state.selected_idx].clone()]
+                        } else {
+                            Vec::new()
+                        };
+
+                        if !selected.is_empty() {
+                            let checking_status = crate::functions::translate("status_checking");
+                            for remote in &selected {
+                                app.connection_state.remote_statuses.insert(remote.clone(), checking_status.clone());
+                            }
+                            if let Some(ref trigger_tx) = app.status_trigger_tx {
+                                let _ = trigger_tx.send(selected);
+                            }
+                        }
+                    }
                     KeyCode::Char('x') | KeyCode::Char('X') if key.modifiers.contains(KeyModifiers::ALT) => {
                         let selected: Vec<String> = if !app.connection_state.selected_names.is_empty() {
                             app.connection_state.remotes.iter().filter(|r| app.connection_state.selected_names.contains(*r)).cloned().collect()

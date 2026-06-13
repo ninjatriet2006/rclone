@@ -172,6 +172,21 @@ pub fn draw(
         ])
         .split(area);
 
+    // Pre-calculate column widths for alignment
+    let max_type_len = state
+        .remotes
+        .iter()
+        .map(|r| remote_types.get(r).map(|s| s.chars().count()).unwrap_or(5))
+        .max()
+        .unwrap_or(5);
+    let max_remote_len = state
+        .remotes
+        .iter()
+        .map(|r| r.chars().count())
+        .max()
+        .unwrap_or(25)
+        .max(25);
+
     // Vẽ danh sách kết nối hiện có
     let items: Vec<ListItem> = state
         .remotes
@@ -210,7 +225,12 @@ pub fn draw(
                 .cloned()
                 .unwrap_or_else(|| crate::lang::translate("status_unchecked"));
             let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
-            let text = format!("{} [{}] -> {:<25} | {}", select_prefix, r_type, remote, status);
+            let text = format!(
+                "{} [{:<type_width$}] -> {:<remote_width$} | {}",
+                select_prefix, r_type, remote, status,
+                type_width = max_type_len,
+                remote_width = max_remote_len
+            );
             ListItem::new(text).style(style)
         })
         .collect();
@@ -920,9 +940,16 @@ pub fn is_field_required(
 
     let required_by_default = fields.iter().find(|f| f.0.to_lowercase() == name_lower).map(|f| f.4).unwrap_or(false);
 
+    // Helper to check if any service account fields are populated
+    let has_service_account = !get_val("service_account_file").trim().is_empty()
+        || !get_val("service_account_credentials").trim().is_empty();
+
     // Mutual exclusivity groups:
     // 1. token vs client_id
     if name_lower == "token" {
+        if has_service_account {
+            return false;
+        }
         let has_client_id = !get_val("client_id").trim().is_empty();
         let has_token = !get_val("token").trim().is_empty();
         return !has_client_id && !has_token;
@@ -933,6 +960,11 @@ pub fn is_field_required(
 
     // 2. service_account_file vs service_account_credentials
     if name_lower == "service_account_file" {
+        let has_token = !get_val("token").trim().is_empty();
+        let has_client_id = !get_val("client_id").trim().is_empty();
+        if has_token || has_client_id {
+            return false;
+        }
         let has_creds = !get_val("service_account_credentials").trim().is_empty();
         let has_file = !get_val("service_account_file").trim().is_empty();
         return !has_creds && !has_file;

@@ -510,7 +510,7 @@ pub struct App {
     pub selected_lang_idx: usize,
 
     // Status checker trigger
-    pub status_trigger_tx: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    pub status_trigger_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<String>>>,
     pub remote_dependencies: std::collections::HashMap<String, String>,
     pub remote_types: std::collections::HashMap<String, String>,
     pub features_cache: std::collections::HashMap<String, serde_json::Value>,
@@ -717,286 +717,282 @@ impl App {
         self.load_active_services_from_file();
 
         // 3. Khởi chạy luồng kiểm tra trạng thái các remote tuần hoàn/chạy ngầm
-        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (status_tx, mut status_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<String>>();
         self.status_trigger_tx = Some(status_tx);
 
         let tx_status = tx.clone();
         tokio::spawn(async move {
             loop {
-                // Fetch list of remotes
-                let res =
-                    rclone::rpc_async("config/listremotes".to_string(), "{}".to_string()).await;
-                if let Ok(rpc_res) = res {
-                    if let Ok(val) = serde_json::from_str::<Value>(&rpc_res.output) {
-                        if let Some(arr) = val.get("remotes").and_then(|r| r.as_array()) {
-                            let remotes: Vec<String> = arr
-                                .iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect();
+                // Chỉ chạy khi nhận được danh sách remote cần kiểm tra
+                let targets = match status_rx.recv().await {
+                    Some(list) => list,
+                    None => break, // Kênh truyền đã đóng, thoát thread
+                };
 
-                            // Xây dựng dependency map ngay trong tác vụ ngầm từ config/dump
-                            let mut local_dependencies = HashMap::new();
-                            let dump_res = rclone::rpc_async("config/dump".to_string(), "{}".to_string()).await;
-                            if let Ok(rpc_dump) = dump_res {
-                                if let Ok(dump_val) = serde_json::from_str::<Value>(&rpc_dump.output) {
-                                    if let Some(obj) = dump_val.as_object() {
-                                        for (name, details) in obj {
-                                            if let Some(details_obj) = details.as_object() {
-                                                if let Some(r_type) = details_obj.get("type").and_then(|t| t.as_str()) {
-                                                    if r_type == "crypt" || r_type == "alias" {
-                                                        if let Some(base_remote_path) = details_obj.get("remote").and_then(|r| r.as_str()) {
-                                                            let base_name = if let Some(idx) = base_remote_path.find(':') {
-                                                                &base_remote_path[..idx]
-                                                            } else {
-                                                                base_remote_path
-                                                            };
-                                                            local_dependencies.insert(name.clone(), base_name.to_string());
-                                                        }
-                                                    }
-                                                }
+                if targets.is_empty() {
+                    continue;
+                }
+
+                // Xây dựng dependency map ngay trong tác vụ ngầm từ config/dump
+                let mut local_dependencies = HashMap::new();
+                let dump_res = rclone::rpc_async("config/dump".to_string(), "{}".to_string()).await;
+                if let Ok(rpc_dump) = dump_res {
+                    if let Ok(dump_val) = serde_json::from_str::<Value>(&rpc_dump.output) {
+                        if let Some(obj) = dump_val.as_object() {
+                            for (name, details) in obj {
+                                if let Some(details_obj) = details.as_object() {
+                                    if let Some(r_type) = details_obj.get("type").and_then(|t| t.as_str()) {
+                                        if r_type == "crypt" || r_type == "alias" {
+                                            if let Some(base_remote_path) = details_obj.get("remote").and_then(|r| r.as_str()) {
+                                                let base_name = if let Some(idx) = base_remote_path.find(':') {
+                                                    &base_remote_path[..idx]
+                                                } else {
+                                                    base_remote_path
+                                                };
+                                                local_dependencies.insert(name.clone(), base_name.to_string());
                                             }
                                         }
                                     }
-                                }
-                            }
-
-                            // Phân phối kiểm tra theo các nhóm (pool) tối đa 10 remote
-                            // Lọc bỏ các remote phụ thuộc (chúng sẽ tự động kế thừa trạng thái từ remote chính)
-                            let independent_remotes: Vec<String> = remotes
-                                .iter()
-                                .filter(|r| !local_dependencies.contains_key(*r))
-                                .cloned()
-                                .collect();
-
-                            for chunk in independent_remotes.chunks(10) {
-                                let mut join_handles = Vec::new();
-                                for remote in chunk {
-                                    let tx_clone = tx_status.clone();
-                                    let remote_clone = remote.clone();
-                                    let handle = tokio::spawn(async move {
-                                        let mut status = "🔴 Ngoại tuyến / Lỗi".to_string();
-
-                                        // Thử lại tối đa 5 lần
-                                        for attempt in 1..=5 {
-                                            let param =
-                                                json!({ "fs": format!("{}:", remote_clone) })
-                                                    .to_string();
-
-                                            // 1. Thử gọi operations/about trước để lấy dung lượng thực tế
-                                            let about_future = rclone::rpc_async(
-                                                "operations/about".to_string(),
-                                                param.clone(),
-                                            );
-                                            let about_result = tokio::time::timeout(
-                                                std::time::Duration::from_secs(5),
-                                                about_future,
-                                            )
-                                            .await;
-
-                                            match about_result {
-                                                Ok(Ok(rpc_res)) => {
-                                                    if rpc_res.status == 200 {
-                                                        if let Ok(space_val) =
-                                                            serde_json::from_str::<Value>(
-                                                                &rpc_res.output,
-                                                            )
-                                                        {
-                                                            if let (Some(total), Some(used)) = (
-                                                                space_val.get("total"),
-                                                                space_val.get("used"),
-                                                            ) {
-                                                                let total_bytes =
-                                                                    total.as_u64().unwrap_or(0);
-                                                                let used_bytes =
-                                                                    used.as_u64().unwrap_or(0);
-                                                                status = format!(
-                                                                    "🟢 Trực tuyến (Đã dùng {} / {})",
-                                                                    crate::ui::format_size(used_bytes),
-                                                                    crate::ui::format_size(total_bytes)
-                                                                );
-                                                            } else {
-                                                                status =
-                                                                    "🟢 Trực tuyến".to_string();
-                                                            }
-                                                        } else {
-                                                            status = "🟢 Trực tuyến".to_string();
-                                                        }
-                                                        break; // Thành công, thoát vòng lặp retry
-                                                    } else {
-                                                        // operations/about lỗi. Kiểm tra chi tiết lỗi
-                                                        let err_msg =
-                                                            serde_json::from_str::<Value>(
-                                                                &rpc_res.output,
-                                                            )
-                                                            .ok()
-                                                            .and_then(|v| {
-                                                                v.get("error")
-                                                                    .and_then(|e| e.as_str())
-                                                                    .map(|s| s.to_string())
-                                                            })
-                                                            .unwrap_or_default();
-
-                                                        let lower = err_msg.to_lowercase();
-
-                                                        // Phán đoán không hỗ trợ about
-                                                        let mut is_not_supported = lower
-                                                            .contains("not supported")
-                                                            || lower.contains("about")
-                                                            || lower.contains("optional feature")
-                                                            || lower.contains("unknown command");
-
-                                                        // Dự phòng: gọi operations/fsinfo kiểm tra nếu error message không rõ ràng nhưng remote vẫn online
-                                                        if !is_not_supported {
-                                                            let fsinfo_future = rclone::rpc_async(
-                                                                "operations/fsinfo".to_string(),
-                                                                param.clone(),
-                                                            );
-                                                            if let Ok(Ok(fsinfo_res)) =
-                                                                tokio::time::timeout(
-                                                                    std::time::Duration::from_secs(
-                                                                        5,
-                                                                    ),
-                                                                    fsinfo_future,
-                                                                )
-                                                                .await
-                                                            {
-                                                                if fsinfo_res.status == 200 {
-                                                                    is_not_supported = true;
-                                                                }
-                                                            }
-                                                        }
-
-                                                        if is_not_supported {
-                                                            let is_already_running = {
-                                                                let mut checks = RUNNING_SIZE_CHECKS.lock().unwrap();
-                                                                if checks.contains(&remote_clone) {
-                                                                    true
-                                                                } else {
-                                                                    checks.insert(remote_clone.clone());
-                                                                    false
-                                                                }
-                                                            };
-
-                                                            if is_already_running {
-                                                                status = "🟢 Trực tuyến (Đang tính dung lượng...)".to_string();
-                                                                break;
-                                                            }
-
-                                                            // Remote online nhưng không hỗ trợ about. Cập nhật trạng thái tạm thời
-                                                            let _ = tx_clone.send(AppEvent::RemoteStatusUpdate {
-                                                                remote: remote_clone.clone(),
-                                                                status: "🟢 Trực tuyến (Đang tính dung lượng...)".to_string(),
-                                                            });
-
-                                                            // Chạy đếm dung lượng ngầm (operations/size) hoàn toàn bất đồng bộ không chặn status checker
-                                                            let tx_size = tx_clone.clone();
-                                                            let remote_size = remote_clone.clone();
-                                                            let param_size = param.clone();
-                                                            tokio::spawn(async move {
-                                                                struct SizeCheckGuard(String);
-                                                                impl Drop for SizeCheckGuard {
-                                                                    fn drop(&mut self) {
-                                                                        RUNNING_SIZE_CHECKS.lock().unwrap().remove(&self.0);
-                                                                    }
-                                                                }
-                                                                let _guard = SizeCheckGuard(remote_size.clone());
-
-                                                                let size_future = rclone::rpc_async(
-                                                                    "operations/size".to_string(),
-                                                                    param_size,
-                                                                );
-                                                                // Không giới hạn thời gian chờ, đặt timeout 1 tiếng
-                                                                match tokio::time::timeout(
-                                                                    std::time::Duration::from_secs(3600),
-                                                                    size_future,
-                                                                )
-                                                                .await
-                                                                {
-                                                                    Ok(Ok(size_rpc_res)) => {
-                                                                        if size_rpc_res.status == 200 {
-                                                                            if let Ok(size_val) =
-                                                                                serde_json::from_str::<Value>(
-                                                                                    &size_rpc_res.output,
-                                                                                )
-                                                                            {
-                                                                                if let Some(used_bytes) = size_val
-                                                                                    .get("bytes")
-                                                                                    .and_then(|b| b.as_u64())
-                                                                                {
-                                                                                    let _ = tx_size.send(AppEvent::RemoteStatusUpdate {
-                                                                                        remote: remote_size,
-                                                                                        status: format!(
-                                                                                            "🟢 Trực tuyến (Đã dùng {} / ∞)",
-                                                                                            crate::ui::format_size(used_bytes)
-                                                                                        ),
-                                                                                    });
-                                                                                    return;
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    _ => {}
-                                                                }
-                                                                let _ = tx_size.send(AppEvent::RemoteStatusUpdate {
-                                                                    remote: remote_size,
-                                                                    status: "🟢 Trực tuyến (Không giới hạn)".to_string(),
-                                                                });
-                                                            });
-
-                                                            status = "🟢 Trực tuyến (Đang tính dung lượng...)".to_string();
-                                                            break; // Hoàn thành quét trạng thái của remote này
-                                                        } else {
-                                                            status = if !err_msg.is_empty() {
-                                                                format!(
-                                                                    "🔴 Lỗi kết nối: {}",
-                                                                    err_msg
-                                                                )
-                                                            } else {
-                                                                format!(
-                                                                    "🔴 Lỗi kết nối (Mã lỗi: {})",
-                                                                    rpc_res.status
-                                                                )
-                                                            };
-                                                        }
-                                                    }
-                                                }
-                                                Ok(Err(_)) => {
-                                                    status = "🔴 Ngoại tuyến / Lỗi".to_string();
-                                                }
-                                                Err(_) => {
-                                                    status = "🟡 Hết thời gian chờ".to_string();
-                                                }
-                                            }
-                                            // Chờ 500ms trước khi thử lại để tránh spam
-                                            if attempt < 5 {
-                                                tokio::time::sleep(Duration::from_millis(500))
-                                                    .await;
-                                            }
-                                        }
-
-                                        let _ = tx_clone.send(AppEvent::RemoteStatusUpdate {
-                                            remote: remote_clone,
-                                            status,
-                                        });
-                                    });
-                                    join_handles.push(handle);
-                                }
-                                // Đợi cả nhóm 10 remote hoàn tất
-                                for handle in join_handles {
-                                    let _ = handle.await;
                                 }
                             }
                         }
                     }
                 }
 
-                // Đợi 60 giây hoặc cho đến khi nhận được tín hiệu kích hoạt thủ công
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(60)) => {}
-                    msg = status_rx.recv() => {
-                        if msg.is_none() {
-                            break;
-                        }
+                // Hàm đệ quy tìm base remote độc lập
+                let resolve_base = |mut r: String| -> String {
+                    while let Some(base) = local_dependencies.get(&r) {
+                        r = base.clone();
+                    }
+                    r
+                };
+
+                // Lọc danh sách cần kiểm tra thành các remote độc lập duy nhất
+                let mut independent_remotes = Vec::new();
+                for t in targets {
+                    let base = resolve_base(t);
+                    if !independent_remotes.contains(&base) {
+                        independent_remotes.push(base);
+                    }
+                }
+
+                // Phân phối kiểm tra theo các nhóm (pool) tối đa 10 remote
+                for chunk in independent_remotes.chunks(10) {
+                    let mut join_handles = Vec::new();
+                    for remote in chunk {
+                        let tx_clone = tx_status.clone();
+                        let remote_clone = remote.clone();
+                        let handle = tokio::spawn(async move {
+                            let mut status = "🔴 Ngoại tuyến / Lỗi".to_string();
+
+                            // Thử lại tối đa 5 lần
+                            for attempt in 1..=5 {
+                                let param =
+                                    json!({ "fs": format!("{}:", remote_clone) })
+                                        .to_string();
+
+                                // 1. Thử gọi operations/about trước để lấy dung lượng thực tế
+                                let about_future = rclone::rpc_async(
+                                    "operations/about".to_string(),
+                                    param.clone(),
+                                );
+                                let about_result = tokio::time::timeout(
+                                    std::time::Duration::from_secs(5),
+                                    about_future,
+                                )
+                                .await;
+
+                                match about_result {
+                                    Ok(Ok(rpc_res)) => {
+                                        if rpc_res.status == 200 {
+                                            if let Ok(space_val) =
+                                                serde_json::from_str::<Value>(
+                                                    &rpc_res.output,
+                                                )
+                                            {
+                                                if let (Some(total), Some(used)) = (
+                                                    space_val.get("total"),
+                                                    space_val.get("used"),
+                                                ) {
+                                                    let total_bytes =
+                                                        total.as_u64().unwrap_or(0);
+                                                    let used_bytes =
+                                                        used.as_u64().unwrap_or(0);
+                                                    status = format!(
+                                                        "🟢 Trực tuyến (Đã dùng {} / {})",
+                                                        crate::ui::format_size(used_bytes),
+                                                        crate::ui::format_size(total_bytes)
+                                                    );
+                                                } else {
+                                                    status =
+                                                        "🟢 Trực tuyến".to_string();
+                                                }
+                                            } else {
+                                                status = "🟢 Trực tuyến".to_string();
+                                            }
+                                            break; // Thành công, thoát vòng lặp retry
+                                        } else {
+                                            // operations/about lỗi. Kiểm tra chi tiết lỗi
+                                            let err_msg =
+                                                serde_json::from_str::<Value>(
+                                                    &rpc_res.output,
+                                                )
+                                                .ok()
+                                                .and_then(|v| {
+                                                    v.get("error")
+                                                        .and_then(|e| e.as_str())
+                                                        .map(|s| s.to_string())
+                                                })
+                                                .unwrap_or_default();
+
+                                            let lower = err_msg.to_lowercase();
+
+                                            // Phán đoán không hỗ trợ about
+                                            let mut is_not_supported = lower
+                                                .contains("not supported")
+                                                || lower.contains("about")
+                                                || lower.contains("optional feature")
+                                                || lower.contains("unknown command");
+
+                                            // Dự phòng: gọi operations/fsinfo kiểm tra nếu error message không rõ ràng nhưng remote vẫn online
+                                            if !is_not_supported {
+                                                let fsinfo_future = rclone::rpc_async(
+                                                    "operations/fsinfo".to_string(),
+                                                    param.clone(),
+                                                );
+                                                if let Ok(Ok(fsinfo_res)) =
+                                                    tokio::time::timeout(
+                                                        std::time::Duration::from_secs(
+                                                            5,
+                                                        ),
+                                                        fsinfo_future,
+                                                    )
+                                                    .await
+                                                {
+                                                    if fsinfo_res.status == 200 {
+                                                        is_not_supported = true;
+                                                    }
+                                                }
+                                            }
+
+                                            if is_not_supported {
+                                                let is_already_running = {
+                                                    let mut checks = RUNNING_SIZE_CHECKS.lock().unwrap();
+                                                    if checks.contains(&remote_clone) {
+                                                        true
+                                                    } else {
+                                                        checks.insert(remote_clone.clone());
+                                                        false
+                                                    }
+                                                };
+
+                                                if is_already_running {
+                                                    status = "🟢 Trực tuyến (Đang tính dung lượng...)".to_string();
+                                                    break;
+                                                }
+
+                                                // Remote online nhưng không hỗ trợ about. Cập nhật trạng thái tạm thời
+                                                let _ = tx_clone.send(AppEvent::RemoteStatusUpdate {
+                                                    remote: remote_clone.clone(),
+                                                    status: "🟢 Trực tuyến (Đang tính dung lượng...)".to_string(),
+                                                });
+
+                                                // Chạy đếm dung lượng ngầm (operations/size) hoàn toàn bất đồng bộ không chặn status checker
+                                                let tx_size = tx_clone.clone();
+                                                let remote_size = remote_clone.clone();
+                                                let param_size = param.clone();
+                                                tokio::spawn(async move {
+                                                    struct SizeCheckGuard(String);
+                                                    impl Drop for SizeCheckGuard {
+                                                        fn drop(&mut self) {
+                                                            RUNNING_SIZE_CHECKS.lock().unwrap().remove(&self.0);
+                                                        }
+                                                    }
+                                                    let _guard = SizeCheckGuard(remote_size.clone());
+
+                                                    let size_future = rclone::rpc_async(
+                                                        "operations/size".to_string(),
+                                                        param_size,
+                                                    );
+                                                    // Không giới hạn thời gian chờ, đặt timeout 1 tiếng
+                                                    match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(3600),
+                                                        size_future,
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(Ok(size_rpc_res)) => {
+                                                            if size_rpc_res.status == 200 {
+                                                                if let Ok(size_val) =
+                                                                    serde_json::from_str::<Value>(
+                                                                        &size_rpc_res.output,
+                                                                    )
+                                                                {
+                                                                    if let Some(used_bytes) = size_val
+                                                                        .get("bytes")
+                                                                        .and_then(|b| b.as_u64())
+                                                                    {
+                                                                        let _ = tx_size.send(AppEvent::RemoteStatusUpdate {
+                                                                            remote: remote_size,
+                                                                            status: format!(
+                                                                                "🟢 Trực tuyến (Đã dùng {} / ∞)",
+                                                                                crate::ui::format_size(used_bytes)
+                                                                            ),
+                                                                        });
+                                                                        return;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                    let _ = tx_size.send(AppEvent::RemoteStatusUpdate {
+                                                        remote: remote_size,
+                                                        status: "🟢 Trực tuyến (Không giới hạn)".to_string(),
+                                                    });
+                                                });
+
+                                                status = "🟢 Trực tuyến (Đang tính dung lượng...)".to_string();
+                                                break; // Hoàn thành quét trạng thái của remote này
+                                            } else {
+                                                status = if !err_msg.is_empty() {
+                                                    format!(
+                                                        "🔴 Lỗi kết nối: {}",
+                                                        err_msg
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "🔴 Lỗi kết nối (Mã lỗi: {})",
+                                                        rpc_res.status
+                                                    )
+                                                };
+                                            }
+                                        }
+                                    }
+                                    Ok(Err(_)) => {
+                                        status = "🔴 Ngoại tuyến / Lỗi".to_string();
+                                    }
+                                    Err(_) => {
+                                        status = "🟡 Hết thời gian chờ".to_string();
+                                    }
+                                }
+                                // Chờ 500ms trước khi thử lại để tránh spam
+                                if attempt < 5 {
+                                    tokio::time::sleep(Duration::from_millis(500))
+                                        .await;
+                                }
+                            }
+
+                            let _ = tx_clone.send(AppEvent::RemoteStatusUpdate {
+                                remote: remote_clone,
+                                status,
+                            });
+                        });
+                        join_handles.push(handle);
+                    }
+                    // Đợi cả nhóm 10 remote hoàn tất
+                    for handle in join_handles {
+                        let _ = handle.await;
                     }
                 }
             }

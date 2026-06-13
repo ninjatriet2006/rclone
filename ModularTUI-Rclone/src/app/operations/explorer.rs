@@ -55,12 +55,7 @@ impl App {
                         self.connection_state
                             .remote_statuses
                             .entry(remote)
-                            .or_insert_with(|| "Đang kiểm tra...".to_string());
-                    }
-
-                    // Kích hoạt tác vụ ngầm kiểm tra lại ngay lập tức
-                    if let Some(ref trigger_tx) = self.status_trigger_tx {
-                        let _ = trigger_tx.send(());
+                            .or_insert_with(|| crate::functions::translate("status_unchecked"));
                     }
                 }
             }
@@ -81,6 +76,13 @@ impl App {
 
         let remote = pane.remote.clone();
         let path = pane.path.clone();
+
+        if !remote.is_empty() {
+            let clean_remote = remote.trim_end_matches(':').to_string();
+            if let Some(ref trigger_tx) = self.status_trigger_tx {
+                let _ = trigger_tx.send(vec![clean_remote]);
+            }
+        }
 
         tokio::spawn(async move {
             let fs_target = if remote.is_empty() {

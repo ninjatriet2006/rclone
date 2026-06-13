@@ -153,6 +153,25 @@ impl App {
                             }
                         }
                     }
+                    KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        let selected: Vec<String> = if !self.connection_state.selected_names.is_empty() {
+                            self.connection_state.remotes.iter().filter(|r| self.connection_state.selected_names.contains(*r)).cloned().collect()
+                        } else if !self.connection_state.remotes.is_empty() {
+                            vec![self.connection_state.remotes[self.connection_state.selected_idx].clone()]
+                        } else {
+                            Vec::new()
+                        };
+
+                        if !selected.is_empty() {
+                            let checking_status = crate::lang::translate("status_checking");
+                            for remote in &selected {
+                                self.connection_state.remote_statuses.insert(remote.clone(), checking_status.clone());
+                            }
+                            if let Some(ref trigger_tx) = self.status_trigger_tx {
+                                let _ = trigger_tx.send(selected);
+                            }
+                        }
+                    }
                     KeyCode::Char('x') | KeyCode::Char('X') if key.modifiers.contains(KeyModifiers::ALT) => {
                         let selected: Vec<String> = if !self.connection_state.selected_names.is_empty() {
                             self.connection_state.remotes.iter().filter(|r| self.connection_state.selected_names.contains(*r)).cloned().collect()

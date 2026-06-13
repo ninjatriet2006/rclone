@@ -21,6 +21,21 @@ pub fn draw_connection_manager(
         ])
         .split(area);
 
+    // Pre-calculate column widths for alignment
+    let max_type_len = state
+        .remotes
+        .iter()
+        .map(|r| remote_types.get(r).map(|s| s.chars().count()).unwrap_or(5))
+        .max()
+        .unwrap_or(5);
+    let max_remote_len = state
+        .remotes
+        .iter()
+        .map(|r| r.chars().count())
+        .max()
+        .unwrap_or(25)
+        .max(25);
+
     // Vẽ danh sách kết nối hiện có
     let items: Vec<ListItem> = state
         .remotes
@@ -59,7 +74,12 @@ pub fn draw_connection_manager(
                 .cloned()
                 .unwrap_or_else(|| translate("status_unchecked"));
             let r_type = remote_types.get(remote).map(|s| s.as_str()).unwrap_or("Cloud");
-            let text = format!("{} [{}] -> {:<25} | {}", select_prefix, r_type, remote, status);
+            let text = format!(
+                "{} [{:<type_width$}] -> {:<remote_width$} | {}",
+                select_prefix, r_type, remote, status,
+                type_width = max_type_len,
+                remote_width = max_remote_len
+            );
             ListItem::new(text).style(style)
         })
         .collect();
