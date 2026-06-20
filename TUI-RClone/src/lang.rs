@@ -1,11 +1,8 @@
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
-lazy_static! {
-    static ref TRANSLATIONS: RwLock<HashMap<String, String>> = RwLock::new(HashMap::new());
-}
+static TRANSLATIONS: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Khởi tạo thư mục và tệp ngôn ngữ mặc định nếu chưa tồn tại
 const DEFAULT_VN: &str = r#"# Rclone-TUI Vietnamese Translations

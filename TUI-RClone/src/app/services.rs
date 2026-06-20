@@ -5,7 +5,8 @@ use std::process::Command;
 
 use crate::app::{
     App,
-    get_rclone_cmd
+    get_rclone_cmd,
+    parse_cmdline
 };
 
 fn get_rclone_exec_path() -> String {

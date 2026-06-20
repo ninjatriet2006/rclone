@@ -15,9 +15,15 @@ impl App {
 
     /// Quét các dịch vụ systemd (rclone) cấp hệ thống và cấp cá nhân
     #[cfg(all(unix, not(target_os = "macos")))]
-        pub fn scan_systemd_services(&mut self) {
+    pub fn scan_systemd_services(&mut self) {
         let systemd = crate::functions::scan_systemd_services();
         self.services_state.systemd_services = systemd;
+    }
+
+    /// Quét các dịch vụ systemd (rclone) cấp hệ thống và cấp cá nhân (không hoạt động trên Windows/macOS)
+    #[cfg(any(not(unix), target_os = "macos"))]
+    pub fn scan_systemd_services(&mut self) {
+        self.services_state.systemd_services.clear();
     }
 
 pub(crate) fn parse_exec_start_full(
